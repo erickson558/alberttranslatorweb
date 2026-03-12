@@ -77,6 +77,15 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
         </label>
         <span class="live-mode-label">Vivo rápido</span>
       </div>
+      <div class="watchdog-tuning" aria-label="Sensibilidad del watchdog de voz">
+        <label for="watchdog-silence-threshold">Watchdog voz</label>
+        <select id="watchdog-silence-threshold">
+          <option value="6">Muy sensible 6s</option>
+          <option value="8">Rápido 8s</option>
+          <option value="10" selected>Balanceado 10s</option>
+          <option value="13">Tolerante 13s</option>
+        </select>
+      </div>
       <span id="status" class="status idle">Inactivo</span>
     </section>
 
@@ -85,6 +94,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       <span id="runtime-incremental-state" class="runtime-chip">Incremental: en espera</span>
       <span id="runtime-segments-state" class="runtime-chip">Segmentos: 0</span>
       <span id="runtime-word-state" class="runtime-chip">Palabras: 0</span>
+      <span id="runtime-watchdog-state" class="runtime-chip">Watchdog: 10s · pase 5s</span>
       <span class="runtime-shortcuts">Atajos: Ctrl+Enter iniciar/detener · Ctrl+Backspace limpiar</span>
     </section>
 

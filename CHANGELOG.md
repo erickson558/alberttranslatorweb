@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.13] - 2026-03-12
+### Added
+- Control en la UI para ajustar la sensibilidad del watchdog de voz entre perfiles mas agresivos o mas tolerantes.
+- Indicador runtime con el umbral activo del watchdog y su ciclo de pasada de 5 segundos.
+
+### Changed
+- El watchdog de reconocimiento ahora revisa el estado cada 5 segundos con umbrales configurables de silencio y estancamiento.
+- Synchronized version to V1.5.13 across VERSION, APP runtime config, and README.
+
 ## [V1.5.12] - 2026-03-12
 ### Fixed
 - Evitada la duplicacion de frases cuando un resultado interim ya confirmado vuelve a llegar como resultado final mas largo del reconocimiento de voz.

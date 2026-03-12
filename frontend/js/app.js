@@ -48,10 +48,12 @@ const typingSpeedDial = document.getElementById("typing-speed");
 const typingSpeedValue = document.getElementById("typing-speed-value");
 const typingStaggerToggle = document.getElementById("typing-stagger");
 const liveTranslationFastToggle = document.getElementById("live-translation-fast");
+const watchdogSilenceThresholdSelect = document.getElementById("watchdog-silence-threshold");
 const runtimeMicState = document.getElementById("runtime-mic-state");
 const runtimeIncrementalState = document.getElementById("runtime-incremental-state");
 const runtimeSegmentsState = document.getElementById("runtime-segments-state");
 const runtimeWordState = document.getElementById("runtime-word-state");
+const runtimeWatchdogState = document.getElementById("runtime-watchdog-state");
 
 const TYPING_PROFILES = {
   cinematic: { speed: 30, stagger: true },
@@ -285,7 +287,7 @@ function setChipTone(el, tone) {
 }
 
 function updateRuntimeStrip() {
-  if (!runtimeMicState || !runtimeIncrementalState || !runtimeSegmentsState || !runtimeWordState) {
+  if (!runtimeMicState || !runtimeIncrementalState || !runtimeSegmentsState || !runtimeWordState || !runtimeWatchdogState) {
     return;
   }
 
@@ -325,6 +327,18 @@ function updateRuntimeStrip() {
   var wordCount = countWords(transcriptForTranslation || getTranscriptFieldText());
   runtimeWordState.textContent = "Palabras: " + wordCount;
   setChipTone(runtimeWordState, wordCount > 0 ? "ok" : "idle");
+
+  var watchdogSeconds = Math.floor(getWatchdogSilenceThresholdMs() / 1000);
+  var watchdogText = "Watchdog: " + watchdogSeconds + "s · pase 5s";
+  var watchdogTone = listeningRequested ? "ok" : "idle";
+  if (listeningRequested && listening) {
+    var watchdogIdleSeconds = recognitionLastResultAt ? Math.floor((Date.now() - recognitionLastResultAt) / 1000) : 0;
+    if (watchdogIdleSeconds >= watchdogSeconds) {
+      watchdogTone = "warn";
+    }
+  }
+  runtimeWatchdogState.textContent = watchdogText;
+  setChipTone(runtimeWatchdogState, watchdogTone);
 }
 
 function handleGlobalShortcuts(event) {
@@ -500,6 +514,16 @@ function wireEvents() {
   if (liveTranslationFastToggle) {
     liveTranslationFastToggle.addEventListener("change", persistUiPreferences);
   }
+
+  if (watchdogSilenceThresholdSelect) {
+    watchdogSilenceThresholdSelect.addEventListener("change", function () {
+      persistUiPreferences();
+      updateRuntimeStrip();
+      if (listeningRequested) {
+        startRecognitionWatchdog();
+      }
+    });
+  }
 }
 
 function getSafeLocalStorage() {
@@ -521,6 +545,7 @@ function persistUiPreferences() {
     typingSpeed: typingSpeedDial ? String(typingSpeedDial.value || "62") : "62",
     typingStagger: !!(typingStaggerToggle && typingStaggerToggle.checked),
     liveFast: !!(liveTranslationFastToggle && liveTranslationFastToggle.checked),
+    watchdogSilenceThreshold: watchdogSilenceThresholdSelect ? String(watchdogSilenceThresholdSelect.value || "10") : "10",
   };
 
   if (ls) {
@@ -592,6 +617,12 @@ function restoreUiPreferences() {
   if (liveTranslationFastToggle && typeof prefs.liveFast === "boolean") {
     liveTranslationFastToggle.checked = prefs.liveFast;
   }
+  if (watchdogSilenceThresholdSelect && typeof prefs.watchdogSilenceThreshold === "string") {
+    watchdogSilenceThresholdSelect.value = prefs.watchdogSilenceThreshold;
+    if (!watchdogSilenceThresholdSelect.value) {
+      watchdogSilenceThresholdSelect.value = "10";
+    }
+  }
 
   if (typingSpeedValue && typingSpeedDial) {
     typingSpeedValue.textContent = String(typingSpeedDial.value || "62");
@@ -603,6 +634,19 @@ function applyDefaultUiPreferences() {
   if (translationProviderSelect) {
     translationProviderSelect.value = "google-free";
   }
+  if (watchdogSilenceThresholdSelect) {
+    watchdogSilenceThresholdSelect.value = "10";
+  }
+}
+
+function getWatchdogSilenceThresholdMs() {
+  var raw = watchdogSilenceThresholdSelect ? Number(watchdogSilenceThresholdSelect.value || 10) : 10;
+  var seconds = Math.max(5, Math.min(20, raw));
+  return seconds * 1000;
+}
+
+function getWatchdogStaleThresholdMs() {
+  return Math.max(getWatchdogSilenceThresholdMs() + 4000, 12000);
 }
 
 function readPrefsCookie() {
@@ -1845,6 +1889,8 @@ function stopRecognitionWatchdog() {
 
 function startRecognitionWatchdog() {
   stopRecognitionWatchdog();
+  var idleThresholdMs = getWatchdogSilenceThresholdMs();
+  var staleThresholdMs = getWatchdogStaleThresholdMs();
   recognitionWatchdogTimer = setInterval(function () {
     if (!listeningRequested || !listening) {
       return;
@@ -1854,12 +1900,12 @@ function startRecognitionWatchdog() {
     var staleMs = now - Number(recognitionLastEventAt || 0);
 
     // Si no hay eventos del motor por demasiado tiempo, recrea la instancia completa.
-    if (staleMs >= 24000) {
+    if (staleMs >= staleThresholdMs) {
       forceRecognitionRecovery("watchdog-stale");
       return;
     }
 
-    if (idleMs < 13000) {
+    if (idleMs < idleThresholdMs) {
       return;
     }
 
@@ -1879,7 +1925,7 @@ function startRecognitionWatchdog() {
       // Ignorado.
     }
     scheduleRecognitionRestart("watchdog", 220);
-  }, 3000);
+  }, 5000);
 }
 
 function forceRecognitionRecovery(reason) {

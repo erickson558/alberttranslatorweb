@@ -205,6 +205,28 @@ button:hover {
   color: #d7e5ff;
 }
 
+.watchdog-tuning {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(9, 14, 28, 0.66);
+}
+
+.watchdog-tuning label {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.watchdog-tuning select {
+  min-width: 138px;
+  padding: 0.32rem 0.4rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
 .stagger-toggle {
   display: inline-flex;
   align-items: center;
@@ -569,5 +591,10 @@ textarea.streaming {
     width: 100%;
     margin-left: 0;
     font-size: 0.76rem;
+  }
+
+  .watchdog-tuning {
+    width: 100%;
+    justify-content: space-between;
   }
 }

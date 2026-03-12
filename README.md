@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.12
+Version actual: V1.5.13
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
@@ -14,6 +14,7 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - Permite seleccionar proveedor de traduccion: Auto, Google Free, LibreTranslate Free, MyMemory Free.
 - Mantiene una UX fluida para texto incremental y traduccion instantanea.
 - Incluye watchdog de reconocimiento para recuperar automaticamente la captura cuando hay cortes o silencios prolongados.
+- Permite ajustar desde la UI la sensibilidad del watchdog de voz para reaccionar mas rapido ante pausas o cuelgues del motor.
 - Evita retraducciones redundantes con encolado en vivo deduplicado y control de frecuencia.
 - Muestra estado operativo en tiempo real (microfono, incremental, segmentos y palabras).
 - Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
