@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.4] - 2026-03-11
+### Changed
+- Incremented release version to keep APP, repository tags, and GitHub Releases aligned with the one-version-per-commit policy.
+- Updated project documentation to reflect current production version.
+
 ## [V1.5.3] - 2026-03-11
 ### Added
 - GitHub Actions workflow to create a release on each push to main using the VERSION file as the release tag.
