@@ -1,0 +1,17 @@
+# OS and editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Build and archive artifacts
+*.zip
+
+# Environment overrides
+.env
+.env.*
+!.env.example
