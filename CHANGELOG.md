@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.10] - 2026-03-12
+### Added
+- Exportacion TXT configurable por alcance: ambos paneles, solo transcripcion o solo traduccion.
+- Nombre de archivo de exportacion con prefijo por alcance y timestamp de inicio de conversacion.
+
+### Changed
+- Fortalecida la recuperacion anti-cuelgue del reconocimiento con deteccion de estancamiento por falta de eventos y recuperacion profunda.
+- Synchronized version to V1.5.10 across VERSION, APP runtime config, and README.
+
 ## [V1.5.9] - 2026-03-12
 ### Added
 - Runtime status strip with live visibility for microphone state, incremental mode, segments, and word counters.

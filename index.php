@@ -46,6 +46,13 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       <button id="start-listening" type="button" class="primary">Iniciar escucha</button>
       <button id="stop-listening" type="button" disabled>Detener</button>
       <button id="clear-output" type="button">Limpiar</button>
+      <button id="export-txt" type="button">Exportar TXT</button>
+      <fieldset class="export-scope" aria-label="Qué exportar en TXT">
+        <legend>Exportar</legend>
+        <label><input type="radio" name="export-scope" value="both" checked> Ambos</label>
+        <label><input type="radio" name="export-scope" value="transcript"> Transcripción</label>
+        <label><input type="radio" name="export-scope" value="translation"> Traducción</label>
+      </fieldset>
       <button id="save-preferences" type="button">Guardar preferencias</button>
       <div class="typing-tuning" aria-label="Ajustes de escritura">
         <label for="typing-profile">Perfil</label>

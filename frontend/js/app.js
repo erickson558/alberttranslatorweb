@@ -28,6 +28,8 @@ const targetSelect = document.getElementById("target-language");
 const startBtn = document.getElementById("start-listening");
 const stopBtn = document.getElementById("stop-listening");
 const clearBtn = document.getElementById("clear-output");
+const exportTxtBtn = document.getElementById("export-txt");
+const exportScopeRadios = document.querySelectorAll('input[name="export-scope"]');
 const savePreferencesBtn = document.getElementById("save-preferences");
 const swapBtn = document.getElementById("swap-languages");
 const transcriptOutput = document.getElementById("transcript-output");
@@ -63,6 +65,7 @@ const BASE = (window.PHP_APP_CONFIG && window.PHP_APP_CONFIG.apiBaseUrl
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 const UI_PREFS_KEY = "albert_translator_ui_prefs_v1";
 const UI_PREFS_COOKIE = "albert_translator_ui_prefs";
+const conversationStartedAt = new Date();
 
 let recognition = null;
 let listening = false;
@@ -91,8 +94,10 @@ let recognitionRestartTimer = null;
 let recognitionWatchdogTimer = null;
 let recognitionRestartAttempts = 0;
 let recognitionLastResultAt = 0;
+let recognitionLastEventAt = 0;
 let recognitionConsecutiveErrors = 0;
 let recognitionLastRestartAt = 0;
+let recognitionLastHardRecoveryAt = 0;
 let incrementalSourceSegments = [];
 let incrementalTranslatedSegments = [];
 let incrementalContextKey = "";
@@ -146,6 +151,17 @@ function initSpeechUnloadGuards() {
   window.addEventListener("beforeunload", forceStopSpeech, false);
   window.addEventListener("pagehide", forceStopSpeech, false);
   window.addEventListener("beforeunload", persistUiPreferences, false);
+
+  // Si la pestana vuelve a estar visible y quedo "reconectando", intenta reanudar.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    if (!listeningRequested || listening) {
+      return;
+    }
+    scheduleRecognitionRestart("visibility-resume", 180, true);
+  });
 }
 
 function initRuntimeEnhancements() {
@@ -387,6 +403,9 @@ function wireEvents() {
   startBtn.addEventListener("click", startListening);
   stopBtn.addEventListener("click", stopListening);
   clearBtn.addEventListener("click", clearOutputs);
+  if (exportTxtBtn) {
+    exportTxtBtn.addEventListener("click", exportConversationToTxt);
+  }
   swapBtn.addEventListener("click", swapLanguages);
   document.addEventListener("keydown", handleGlobalShortcuts);
 
@@ -1661,6 +1680,7 @@ function startListening() {
   }
 
   listeningRequested = true;
+  recognitionLastEventAt = Date.now();
 
   initializeRecognitionInstance();
 
@@ -1669,6 +1689,7 @@ function startListening() {
     recognitionRestartAttempts = 0;
     recognitionConsecutiveErrors = 0;
     recognitionLastResultAt = Date.now();
+    recognitionLastEventAt = Date.now();
     recognitionLastRestartAt = Date.now();
     startRecognitionWatchdog();
     listening = true;
@@ -1678,6 +1699,7 @@ function startListening() {
   };
 
   recognition.onerror = function (event) {
+    recognitionLastEventAt = Date.now();
     var code = String(event && event.error ? event.error : "desconocido");
 
     if (code === "aborted") {
@@ -1718,6 +1740,7 @@ function startListening() {
   };
 
   recognition.onend = function () {
+    recognitionLastEventAt = Date.now();
     clearInterimCommitTimer();
     commitPendingInterim("onend");
 
@@ -1740,6 +1763,7 @@ function startListening() {
   };
 
   recognition.onresult = function (event) {
+    recognitionLastEventAt = Date.now();
     var parsed = null;
     if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.parseRecognitionEvent) {
       parsed = window.AlbertTranscriptionEngine.parseRecognitionEvent(event);
@@ -1825,7 +1849,16 @@ function startRecognitionWatchdog() {
     if (!listeningRequested || !listening) {
       return;
     }
-    var idleMs = Date.now() - Number(recognitionLastResultAt || 0);
+    var now = Date.now();
+    var idleMs = now - Number(recognitionLastResultAt || 0);
+    var staleMs = now - Number(recognitionLastEventAt || 0);
+
+    // Si no hay eventos del motor por demasiado tiempo, recrea la instancia completa.
+    if (staleMs >= 24000) {
+      forceRecognitionRecovery("watchdog-stale");
+      return;
+    }
+
     if (idleMs < 13000) {
       return;
     }
@@ -1849,12 +1882,49 @@ function startRecognitionWatchdog() {
   }, 3000);
 }
 
-function scheduleRecognitionRestart(reason, delayMs) {
+function forceRecognitionRecovery(reason) {
   if (!listeningRequested) {
     return;
   }
 
-  if ((Date.now() - recognitionLastRestartAt) < 250) {
+  var now = Date.now();
+  if ((now - recognitionLastHardRecoveryAt) < 4500) {
+    return;
+  }
+  recognitionLastHardRecoveryAt = now;
+
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+
+  try {
+    if (recognition) {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      if (typeof recognition.abort === "function") {
+        recognition.abort();
+      } else {
+        recognition.stop();
+      }
+    }
+  } catch (_e) {
+    // Ignorado.
+  }
+
+  recognition = null;
+  listening = false;
+  showError("Transcripcion pausada, reiniciando captura...");
+  scheduleRecognitionRestart(reason + "-hard", 280, true);
+}
+
+function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
+  if (!listeningRequested) {
+    return;
+  }
+
+  if (!skipThrottle && (Date.now() - recognitionLastRestartAt) < 250) {
     return;
   }
 
@@ -1865,12 +1935,9 @@ function scheduleRecognitionRestart(reason, delayMs) {
   recognitionRestartAttempts += 1;
   var maxAttempts = 14;
   if (recognitionRestartAttempts > maxAttempts) {
-    listeningRequested = false;
-    listening = false;
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    setStatus("error", "No se pudo reanudar");
-    showError("La transcripción se detuvo y no logró reconectar. Presiona Iniciar escucha.");
+    recognitionRestartAttempts = 0;
+    showError("Motor de voz saturado, aplicando recuperacion profunda...");
+    forceRecognitionRecovery(reason + "-max-attempts");
     return;
   }
 
@@ -1911,6 +1978,7 @@ function stopListening() {
   listeningRequested = false;
   lastIncrementalAddedCount = 0;
   recognitionConsecutiveErrors = 0;
+  recognitionLastEventAt = 0;
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
@@ -1931,7 +1999,11 @@ function stopListening() {
   }
 
   if (recognition) {
-    recognition.stop();
+    try {
+      recognition.stop();
+    } catch (_e) {
+      // Ignorado.
+    }
   }
 }
 
@@ -1943,6 +2015,7 @@ function clearOutputs() {
   clearRecognitionRestartTimer();
   recognitionRestartAttempts = 0;
   recognitionLastResultAt = 0;
+  recognitionLastEventAt = 0;
   recognitionConsecutiveErrors = 0;
   lastIncrementalAddedCount = 0;
   resetLiveEnqueueState();
@@ -1997,6 +2070,99 @@ function resolveRecognitionLang(code) {
 
 function resolveSpeechLang(code) {
   return resolveRecognitionLang(code);
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function getSelectedExportScope() {
+  if (!exportScopeRadios || !exportScopeRadios.length) {
+    return "both";
+  }
+  for (var i = 0; i < exportScopeRadios.length; i += 1) {
+    if (exportScopeRadios[i].checked) {
+      return String(exportScopeRadios[i].value || "both");
+    }
+  }
+  return "both";
+}
+
+function buildConversationDefaultFilename(scope) {
+  var selected = String(scope || "both").toLowerCase();
+  var suffix = "ambos";
+  if (selected === "transcript") {
+    suffix = "transcripcion";
+  } else if (selected === "translation") {
+    suffix = "traduccion";
+  }
+
+  var d = conversationStartedAt instanceof Date ? conversationStartedAt : new Date();
+  var y = d.getFullYear();
+  var m = pad2(d.getMonth() + 1);
+  var day = pad2(d.getDate());
+  var h = pad2(d.getHours());
+  var min = pad2(d.getMinutes());
+  var s = pad2(d.getSeconds());
+  return "conversacion_" + suffix + "_" + y + "-" + m + "-" + day + "_" + h + "-" + min + "-" + s + ".txt";
+}
+
+function exportConversationToTxt() {
+  var scope = getSelectedExportScope();
+  var transcript = stripVisualCursor(transcriptOutput ? transcriptOutput.value : "");
+  var translation = stripVisualCursor(translationOutput ? translationOutput.value : "");
+
+  if (scope === "transcript" && !transcript) {
+    showError("No hay transcripción para exportar.");
+    showToast("No hay transcripción para exportar", "warn");
+    return;
+  }
+
+  if (scope === "translation" && !translation) {
+    showError("No hay traducción para exportar.");
+    showToast("No hay traducción para exportar", "warn");
+    return;
+  }
+
+  if (scope === "both" && !transcript && !translation) {
+    showError("No hay contenido para exportar.");
+    showToast("No hay contenido para exportar", "warn");
+    return;
+  }
+
+  var started = conversationStartedAt instanceof Date ? conversationStartedAt : new Date();
+  var lines = [
+    "Albert Translator - Exportacion",
+    "Inicio conversacion: " + started.toLocaleString(),
+    "",
+  ];
+
+  if (scope === "both" || scope === "transcript") {
+    lines.push("=== TRANSCRIPCION ===");
+    lines.push(transcript || "(sin transcripcion)");
+    lines.push("");
+  }
+
+  if (scope === "both" || scope === "translation") {
+    lines.push("=== TRADUCCION ===");
+    lines.push(translation || "(sin traduccion)");
+    lines.push("");
+  }
+
+  var content = lines.join("\n");
+
+  var blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = buildConversationDefaultFilename(scope);
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+
+  showError("");
+  showToast("TXT exportado", "ok");
 }
 
 function stripVisualCursor(value) {

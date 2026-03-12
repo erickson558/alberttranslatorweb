@@ -140,6 +140,36 @@ button:hover {
   align-items: center;
 }
 
+.export-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.55rem 0.38rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(9, 14, 28, 0.66);
+  margin: 0;
+}
+
+.export-scope legend {
+  padding: 0 0.2rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.export-scope label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  font-size: 0.8rem;
+  color: #d7e5ff;
+  cursor: pointer;
+}
+
+.export-scope input[type="radio"] {
+  accent-color: var(--accent);
+}
+
 .typing-tuning {
   display: inline-flex;
   align-items: center;
