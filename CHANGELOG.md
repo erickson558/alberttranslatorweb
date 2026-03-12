@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.6] - 2026-03-12
+### Fixed
+- Kept translation typewriter animation while rendering live transcript instantly to avoid lag, dropped phrases, and disappearing interim text.
+
+### Changed
+- Synchronized version to V1.5.6 across VERSION, APP runtime config, and documentation.
+
 ## [V1.5.5] - 2026-03-12
 ### Fixed
 - Removed live preview/local fallback path in frontend translation flow that could leave mixed EN/ES text in the translation box.

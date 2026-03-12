@@ -644,6 +644,16 @@ function animateTypeInto(textarea, finalText, mode) {
     return;
   }
 
+  // La transcripcion en vivo debe renderizarse al instante para evitar atraso y perdida visual.
+  if (mode === "transcript") {
+    stopTypewriter("transcript");
+    state.raw = String(finalText || "");
+    textarea.value = state.raw;
+    textarea.classList.remove("typing");
+    autoScrollToEnd(textarea);
+    return;
+  }
+
   state.target = String(finalText || "");
 
   if (state.running) {
