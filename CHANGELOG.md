@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.9] - 2026-03-12
+### Added
+- Runtime status strip with live visibility for microphone state, incremental mode, segments, and word counters.
+- Keyboard shortcuts for faster operation: `Ctrl+Enter` (start/stop or manual translate) and `Ctrl+Backspace` (clear).
+
+### Changed
+- Improved live typewriter behavior with smoother target updates and reduced-motion compatibility.
+- Added interim-by-silence auto-commit to reduce dropped phrases when speech results stay non-final.
+- Hardened recognition watchdog and restart flow with cooldowns, adaptive delays, and better handling of common Web Speech errors.
+- Reduced redundant live translations via deduplicated/throttled enqueue logic.
+- Synchronized version to V1.5.9 across VERSION, APP runtime config, and README.
+
 ## [V1.5.8] - 2026-03-12
 ### Fixed
 - Hardened phrase/sentence translation engine for browser compatibility (removed lookbehind regex usage).

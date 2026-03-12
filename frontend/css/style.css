@@ -296,6 +296,55 @@ button:disabled {
   color: var(--danger);
 }
 
+.runtime-strip {
+  margin-top: 0.8rem;
+  padding: 0.62rem 0.72rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(8, 13, 26, 0.72);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  align-items: center;
+}
+
+.runtime-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.26rem 0.56rem;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 151, 230, 0.28);
+  background: rgba(13, 20, 40, 0.88);
+  color: #d3e1ff;
+  font-size: 0.79rem;
+  line-height: 1.15;
+}
+
+.runtime-chip.ok {
+  border-color: rgba(49, 208, 155, 0.46);
+  background: rgba(16, 42, 35, 0.88);
+  color: #cffff0;
+}
+
+.runtime-chip.warn {
+  border-color: rgba(255, 200, 87, 0.5);
+  background: rgba(52, 40, 15, 0.9);
+  color: #ffe8b0;
+}
+
+.runtime-chip.idle {
+  border-color: rgba(130, 151, 230, 0.28);
+  background: rgba(13, 20, 40, 0.88);
+  color: #d3e1ff;
+}
+
+.runtime-shortcuts {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 @keyframes pulseDot {
   0%, 100% { transform: scale(0.8); opacity: 0.5; }
   50% { transform: scale(1.2); opacity: 1; }
@@ -433,6 +482,22 @@ textarea.streaming {
   transform: translateY(0) scale(1);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .app-shell,
+  textarea.typing,
+  textarea.streaming,
+  .status.processing::after {
+    animation: none !important;
+  }
+}
+
 @media (max-width: 900px) {
   .language-bar {
     grid-template-columns: 1fr;
@@ -468,5 +533,11 @@ textarea.streaming {
     right: 1rem;
     bottom: 1rem;
     text-align: center;
+  }
+
+  .runtime-shortcuts {
+    width: 100%;
+    margin-left: 0;
+    font-size: 0.76rem;
   }
 }

@@ -73,6 +73,14 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       <span id="status" class="status idle">Inactivo</span>
     </section>
 
+    <section class="runtime-strip" aria-live="polite">
+      <span id="runtime-mic-state" class="runtime-chip">Micrófono: detenido</span>
+      <span id="runtime-incremental-state" class="runtime-chip">Incremental: en espera</span>
+      <span id="runtime-segments-state" class="runtime-chip">Segmentos: 0</span>
+      <span id="runtime-word-state" class="runtime-chip">Palabras: 0</span>
+      <span class="runtime-shortcuts">Atajos: Ctrl+Enter iniciar/detener · Ctrl+Backspace limpiar</span>
+    </section>
+
     <section class="panes">
       <article class="pane">
         <div class="pane-head">

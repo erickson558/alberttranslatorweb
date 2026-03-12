@@ -656,5 +656,5 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         }
     }
 
-    return $transcript;
+    return '';
 }

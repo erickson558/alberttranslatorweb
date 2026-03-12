@@ -124,13 +124,13 @@
               signal
             );
           } catch (_fallbackError) {
-            translated = segment;
+            translated = "";
           }
         }
         segmentCache.set(cacheKey, translated);
       }
 
-      translatedSegments.push(translated || segment);
+      translatedSegments.push(translated || "");
       if (onSegment) {
         onSegment(translatedSegments.join("\n"), i + 1, segments.length);
       }

@@ -46,6 +46,10 @@ const typingSpeedDial = document.getElementById("typing-speed");
 const typingSpeedValue = document.getElementById("typing-speed-value");
 const typingStaggerToggle = document.getElementById("typing-stagger");
 const liveTranslationFastToggle = document.getElementById("live-translation-fast");
+const runtimeMicState = document.getElementById("runtime-mic-state");
+const runtimeIncrementalState = document.getElementById("runtime-incremental-state");
+const runtimeSegmentsState = document.getElementById("runtime-segments-state");
+const runtimeWordState = document.getElementById("runtime-word-state");
 
 const TYPING_PROFILES = {
   cinematic: { speed: 30, stagger: true },
@@ -80,8 +84,23 @@ let queuedTranslationText = "";
 let queuedTranslationFromManual = false;
 let queuedTranslationMode = "replace";
 let lastInterimChunk = "";
+let interimCommitTimer = null;
 let toastTimer = null;
 let toastEl = null;
+let recognitionRestartTimer = null;
+let recognitionWatchdogTimer = null;
+let recognitionRestartAttempts = 0;
+let recognitionLastResultAt = 0;
+let recognitionConsecutiveErrors = 0;
+let recognitionLastRestartAt = 0;
+let incrementalSourceSegments = [];
+let incrementalTranslatedSegments = [];
+let incrementalContextKey = "";
+let runtimeHeartbeatTimer = null;
+let lastIncrementalAddedCount = 0;
+let prefersReducedMotion = false;
+let lastLiveEnqueueTextNorm = "";
+let lastLiveEnqueueAt = 0;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
@@ -119,6 +138,7 @@ buildLanguageOptions();
 restoreUiPreferences();
 wireEvents();
 initSpeechUnloadGuards();
+initRuntimeEnhancements();
 checkHealth();
 
 function initSpeechUnloadGuards() {
@@ -126,6 +146,208 @@ function initSpeechUnloadGuards() {
   window.addEventListener("beforeunload", forceStopSpeech, false);
   window.addEventListener("pagehide", forceStopSpeech, false);
   window.addEventListener("beforeunload", persistUiPreferences, false);
+}
+
+function initRuntimeEnhancements() {
+  prefersReducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  updateRuntimeStrip();
+  if (runtimeHeartbeatTimer) {
+    clearInterval(runtimeHeartbeatTimer);
+  }
+  runtimeHeartbeatTimer = setInterval(function () {
+    updateRuntimeStrip();
+  }, 1000);
+}
+
+function clearInterimCommitTimer() {
+  if (interimCommitTimer) {
+    clearTimeout(interimCommitTimer);
+    interimCommitTimer = null;
+  }
+}
+
+function getLastCommittedTranscriptNormalized() {
+  var lines = String(transcriptCommittedText || "")
+    .split(/\r?\n+/)
+    .map(function (line) {
+      return String(line || "").trim();
+    })
+    .filter(Boolean);
+  if (!lines.length) {
+    return "";
+  }
+  return normalizeFlatText(lines[lines.length - 1]);
+}
+
+function canCommitInterimChunk(chunk) {
+  var text = String(chunk || "").trim();
+  if (!text) {
+    return false;
+  }
+
+  var normalized = normalizeFlatText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  // Evita duplicar la ultima frase ya confirmada.
+  if (normalized === getLastCommittedTranscriptNormalized()) {
+    return false;
+  }
+
+  // Filtra ruido muy corto en interim.
+  var words = countWords(text);
+  if (words < 2 && text.length < 9) {
+    return false;
+  }
+
+  return true;
+}
+
+function commitPendingInterim(reason) {
+  var pending = String(lastInterimChunk || "").trim();
+  if (!canCommitInterimChunk(pending)) {
+    return false;
+  }
+
+  appendTranscriptChunk(pending);
+  lastInterimChunk = "";
+
+  var transcriptNow = getTranscriptFieldText();
+  if (transcriptNow) {
+    maybeEnqueueLiveTranslation(transcriptNow, reason !== "silence");
+  }
+  return true;
+}
+
+function scheduleInterimCommitBySilence() {
+  clearInterimCommitTimer();
+  if (!listeningRequested) {
+    return;
+  }
+
+  var delay = getLiveTranslationMode() === "fast" ? 780 : 1180;
+  interimCommitTimer = setTimeout(function () {
+    if (!listeningRequested) {
+      return;
+    }
+    commitPendingInterim("silence");
+  }, delay);
+}
+
+function shouldInstantRenderTypewriter(mode, target) {
+  if (mode === "transcript") {
+    return true;
+  }
+  var text = String(target || "");
+  if (prefersReducedMotion) {
+    return true;
+  }
+  if (text.length > 2200) {
+    return true;
+  }
+  return false;
+}
+
+function longestCommonPrefixLength(a, b) {
+  var left = String(a || "");
+  var right = String(b || "");
+  var max = Math.min(left.length, right.length);
+  var i = 0;
+  while (i < max && left.charAt(i) === right.charAt(i)) {
+    i += 1;
+  }
+  return i;
+}
+
+function setChipTone(el, tone) {
+  if (!el) {
+    return;
+  }
+  el.classList.remove("ok", "warn", "idle");
+  el.classList.add(tone || "idle");
+}
+
+function updateRuntimeStrip() {
+  if (!runtimeMicState || !runtimeIncrementalState || !runtimeSegmentsState || !runtimeWordState) {
+    return;
+  }
+
+  var micText = "Micrófono: detenido";
+  var micTone = "idle";
+  if (listeningRequested && listening) {
+    var idleSeconds = recognitionLastResultAt ? Math.floor((Date.now() - recognitionLastResultAt) / 1000) : 0;
+    micText = idleSeconds > 0
+      ? ("Micrófono: activo · última voz hace " + idleSeconds + "s")
+      : "Micrófono: activo";
+    micTone = idleSeconds >= 9 ? "warn" : "ok";
+  } else if (listeningRequested && !listening) {
+    micText = "Micrófono: reconectando";
+    micTone = "warn";
+  }
+  runtimeMicState.textContent = micText;
+  setChipTone(runtimeMicState, micTone);
+
+  var incLabel = "Incremental: en espera";
+  var incTone = "idle";
+  if (listeningRequested) {
+    if (lastIncrementalAddedCount > 0) {
+      incLabel = "Incremental: +" + lastIncrementalAddedCount + " nuevas";
+      incTone = "ok";
+    } else {
+      incLabel = "Incremental: sin cambios";
+      incTone = "idle";
+    }
+  }
+  runtimeIncrementalState.textContent = incLabel;
+  setChipTone(runtimeIncrementalState, incTone);
+
+  var segmentCount = splitTranscriptIntoSegments(transcriptForTranslation || getTranscriptFieldText()).length;
+  runtimeSegmentsState.textContent = "Segmentos: " + segmentCount;
+  setChipTone(runtimeSegmentsState, segmentCount > 0 ? "ok" : "idle");
+
+  var wordCount = countWords(transcriptForTranslation || getTranscriptFieldText());
+  runtimeWordState.textContent = "Palabras: " + wordCount;
+  setChipTone(runtimeWordState, wordCount > 0 ? "ok" : "idle");
+}
+
+function handleGlobalShortcuts(event) {
+  var key = String(event && event.key ? event.key : "").toLowerCase();
+  if (!event.ctrlKey) {
+    return;
+  }
+
+  var activeEl = document.activeElement;
+  var isTypingField = activeEl && (
+    activeEl.tagName === "INPUT"
+    || activeEl.tagName === "TEXTAREA"
+    || activeEl.isContentEditable
+  );
+
+  if (key === "enter") {
+    if (activeEl === manualInput) {
+      event.preventDefault();
+      var txt = String(manualInput.value || "").trim();
+      if (txt) {
+        runManualTranslation(txt);
+      }
+      return;
+    }
+    if (!isTypingField) {
+      event.preventDefault();
+      if (listeningRequested) {
+        stopListening();
+      } else {
+        startListening();
+      }
+    }
+    return;
+  }
+
+  if (key === "backspace" && !isTypingField) {
+    event.preventDefault();
+    clearOutputs();
+  }
 }
 
 function forceStopSpeech() {
@@ -166,6 +388,7 @@ function wireEvents() {
   stopBtn.addEventListener("click", stopListening);
   clearBtn.addEventListener("click", clearOutputs);
   swapBtn.addEventListener("click", swapLanguages);
+  document.addEventListener("keydown", handleGlobalShortcuts);
 
   if (savePreferencesBtn) {
     savePreferencesBtn.addEventListener("click", function () {
@@ -194,13 +417,17 @@ function wireEvents() {
   });
 
   sourceSelect.addEventListener("change", function () {
+    resetIncrementalTranslationState();
     persistUiPreferences();
     if (recognition && listening) {
       recognition.lang = resolveRecognitionLang(sourceSelect.value);
     }
   });
 
-  targetSelect.addEventListener("change", persistUiPreferences);
+  targetSelect.addEventListener("change", function () {
+    resetIncrementalTranslationState();
+    persistUiPreferences();
+  });
 
   translateManualBtn.addEventListener("click", function () {
     var text = String(manualInput.value || "").trim();
@@ -217,6 +444,7 @@ function wireEvents() {
 
   if (translationProviderSelect) {
     translationProviderSelect.addEventListener("change", function () {
+      resetIncrementalTranslationState();
       persistUiPreferences();
       var txt = String(manualInput.value || "").trim();
       if (txt.length > 1) {
@@ -484,6 +712,7 @@ function setStatus(state, text) {
   statusBox.textContent = text;
   statusBox.classList.remove("idle", "listening", "processing", "error");
   statusBox.classList.add(state);
+  updateRuntimeStrip();
 }
 
 function showError(message) {
@@ -554,6 +783,7 @@ function appendTranscriptChunk(chunk) {
   transcriptCommittedText = String(next.committedText || "");
   transcriptForTranslation = String(next.forTranslation || "");
   animateTypeInto(transcriptOutput, transcriptCommittedText, "transcript");
+  updateRuntimeStrip();
 }
 
 function renderTranscriptLive(interimText) {
@@ -575,6 +805,7 @@ function renderTranscriptLive(interimText) {
   }
 
   animateTypeInto(transcriptOutput, text, "transcript");
+  updateRuntimeStrip();
 }
 
 function composeTranscriptForTranslation(interimText) {
@@ -605,12 +836,12 @@ function computeTypeDelayMs(ch, mode) {
     return Math.max(4, Math.floor(delay * 0.5));
   }
   if (/[,.!?;:]/.test(ch)) {
-    return Math.floor(delay + 50);
+    return Math.floor(delay + 60);
   }
   if (ch === "\n") {
-    return Math.floor(delay + 24);
+    return Math.floor(delay + 34);
   }
-  return Math.floor(delay + Math.random() * 9);
+  return Math.floor(delay + Math.random() * 7);
 }
 
 function shouldUseStagger() {
@@ -693,9 +924,8 @@ function animateTypeInto(textarea, finalText, mode) {
     return;
   }
 
-  // La transcripcion en vivo debe renderizarse al instante para evitar atraso y perdida visual.
-  if (mode === "transcript") {
-    stopTypewriter("transcript");
+  if (shouldInstantRenderTypewriter(mode, finalText)) {
+    stopTypewriter(mode || "translation");
     state.raw = String(finalText || "");
     textarea.value = state.raw;
     textarea.classList.remove("typing");
@@ -719,12 +949,15 @@ function animateTypeInto(textarea, finalText, mode) {
       return;
     }
 
-    // Si el target cambia bruscamente, sincroniza sin parpadeo.
+    // Si el target cambia bruscamente, preserva prefijo comun para que se vea natural.
     if (target.indexOf(current) !== 0) {
-      state.raw = target;
-      stopTypewriter(mode);
-      textarea.classList.remove("typing");
-      return;
+      var prefixLen = longestCommonPrefixLength(current, target);
+      state.raw = target.substring(0, prefixLen);
+      if (state.raw === target) {
+        stopTypewriter(mode);
+        textarea.classList.remove("typing");
+        return;
+      }
     }
 
     var nextIndex = nextTypedIndex(target, current.length);
@@ -855,6 +1088,123 @@ async function drainTranslationQueue() {
 
 function normalizeFlatText(text) {
   return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function resetLiveEnqueueState() {
+  lastLiveEnqueueTextNorm = "";
+  lastLiveEnqueueAt = 0;
+}
+
+function maybeEnqueueLiveTranslation(text, force) {
+  var value = String(text || "").trim();
+  if (!value) {
+    return;
+  }
+
+  var normalized = normalizeFlatText(value);
+  if (!normalized) {
+    return;
+  }
+
+  var now = Date.now();
+  var minGap = getLiveTranslationMode() === "fast" ? 280 : 420;
+  if (!force && normalized === lastLiveEnqueueTextNorm && (now - lastLiveEnqueueAt) < 1500) {
+    return;
+  }
+  if (!force && (now - lastLiveEnqueueAt) < minGap) {
+    return;
+  }
+
+  lastLiveEnqueueTextNorm = normalized;
+  lastLiveEnqueueAt = now;
+  enqueueTranslation(value, false, 0, "replace");
+}
+
+function splitTranscriptIntoSegments(text) {
+  var raw = String(text || "").trim();
+  if (!raw) {
+    return [];
+  }
+
+  var lines = raw.split(/\r?\n+/);
+  var out = [];
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = String(lines[i] || "").trim();
+    if (!line) {
+      continue;
+    }
+
+    var parts = [];
+    var regex = /[^.!?;:]+[.!?;:]?|[.!?;:]+/g;
+    var match = null;
+    while ((match = regex.exec(line)) !== null) {
+      var piece = String(match[0] || "").trim();
+      if (piece) {
+        parts.push(piece);
+      }
+    }
+
+    if (!parts.length) {
+      out.push(line);
+      continue;
+    }
+
+    for (var j = 0; j < parts.length; j += 1) {
+      out.push(parts[j]);
+    }
+  }
+
+  return out;
+}
+
+function makeIncrementalContextKey() {
+  var src = sourceSelect ? String(sourceSelect.value || "auto").toLowerCase() : "auto";
+  var tgt = targetSelect ? String(targetSelect.value || "es").toLowerCase() : "es";
+  var provider = translationProviderSelect ? String(translationProviderSelect.value || "auto").toLowerCase() : "auto";
+  return [src, tgt, provider].join("|");
+}
+
+function resetIncrementalTranslationState() {
+  incrementalSourceSegments = [];
+  incrementalTranslatedSegments = [];
+  incrementalContextKey = "";
+  lastIncrementalAddedCount = 0;
+  resetLiveEnqueueState();
+  updateRuntimeStrip();
+}
+
+function findCommonPrefixCount(left, right) {
+  var max = Math.min(left.length, right.length);
+  var count = 0;
+  while (count < max && normalizeFlatText(left[count]) === normalizeFlatText(right[count])) {
+    count += 1;
+  }
+  return count;
+}
+
+function splitTranslatedSegmentsText(text, expectedCount) {
+  var trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  var lines = trimmed
+    .split(/\r?\n+/)
+    .map(function (line) {
+      return String(line || "").trim();
+    })
+    .filter(Boolean);
+
+  if (expectedCount <= 1) {
+    return [trimmed];
+  }
+
+  if (lines.length >= expectedCount) {
+    return lines.slice(0, expectedCount);
+  }
+
+  // Si el proveedor no devolvio saltos por segmento, conserva en un solo bloque.
+  return [trimmed];
 }
 
 function isEffectiveClientTranslation(original, translated, source, target) {
@@ -1050,19 +1400,85 @@ async function processTranscript(text, fromManual, mode) {
   try {
     var translatedText = "";
     if (window.AlbertTranslationEngine && typeof window.AlbertTranslationEngine.translateByPhrases === "function") {
-      translatedText = await window.AlbertTranslationEngine.translateByPhrases({
-        baseUrl: BASE,
-        text: text,
-        sourceLanguage: sourceSelect.value,
-        targetLanguage: targetSelect.value,
-        provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
-        signal: requestController.signal,
-        onSegment: function (partialTranslation) {
-          if (!fromManual && listeningRequested) {
-            animateTypeInto(translationOutput, String(partialTranslation || ""), "translation");
+      var isLiveIncremental = !fromManual && listeningRequested;
+      var sourceCode = sourceSelect ? sourceSelect.value : "auto";
+      var targetCode = targetSelect ? targetSelect.value : "es";
+      var providerCode = translationProviderSelect ? translationProviderSelect.value : "google-free";
+
+      if (isLiveIncremental) {
+        var segmentsNow = splitTranscriptIntoSegments(text);
+        var contextNow = makeIncrementalContextKey();
+
+        if (incrementalContextKey !== contextNow) {
+          resetIncrementalTranslationState();
+          incrementalContextKey = contextNow;
+        }
+
+        var prefixCount = findCommonPrefixCount(incrementalSourceSegments, segmentsNow);
+        if (prefixCount < incrementalSourceSegments.length) {
+          incrementalSourceSegments = incrementalSourceSegments.slice(0, prefixCount);
+          incrementalTranslatedSegments = incrementalTranslatedSegments.slice(0, prefixCount);
+        }
+
+        var pendingSegments = segmentsNow.slice(prefixCount);
+        var existingTranslatedText = incrementalTranslatedSegments.join("\n").trim();
+        lastIncrementalAddedCount = pendingSegments.length;
+
+        if (!pendingSegments.length) {
+          translatedText = existingTranslatedText;
+        } else {
+          var pendingText = pendingSegments.join("\n");
+          var pendingTranslatedText = await window.AlbertTranslationEngine.translateByPhrases({
+            baseUrl: BASE,
+            text: pendingText,
+            sourceLanguage: sourceCode,
+            targetLanguage: targetCode,
+            provider: providerCode,
+            signal: requestController.signal,
+            onSegment: function (partialTranslation) {
+              var stablePrefix = incrementalTranslatedSegments.join("\n").trim();
+              var partialTail = String(partialTranslation || "").trim();
+              var progressive = stablePrefix && partialTail
+                ? (stablePrefix + "\n" + partialTail)
+                : (stablePrefix || partialTail);
+              if (progressive) {
+                animateTypeInto(translationOutput, progressive, "translation");
+              }
+            },
+          });
+
+          var pendingTranslatedSegments = splitTranslatedSegmentsText(pendingTranslatedText, pendingSegments.length);
+          for (var i = 0; i < pendingSegments.length; i += 1) {
+            var srcSeg = String(pendingSegments[i] || "").trim();
+            var trSeg = String(pendingTranslatedSegments[i] || "").trim();
+            if (!trSeg && i === 0 && pendingTranslatedSegments.length === 1) {
+              trSeg = String(pendingTranslatedSegments[0] || "").trim();
+            }
+            incrementalSourceSegments.push(srcSeg);
+            incrementalTranslatedSegments.push(trSeg);
           }
-        },
-      });
+
+          translatedText = incrementalTranslatedSegments.join("\n").trim();
+        }
+
+        incrementalSourceSegments = segmentsNow.slice();
+      } else {
+        resetIncrementalTranslationState();
+        lastIncrementalAddedCount = splitTranscriptIntoSegments(text).length;
+        translatedText = await window.AlbertTranslationEngine.translateByPhrases({
+          baseUrl: BASE,
+          text: text,
+          sourceLanguage: sourceCode,
+          targetLanguage: targetCode,
+          provider: providerCode,
+          signal: requestController.signal,
+          onSegment: function (partialTranslation) {
+            if (!fromManual && listeningRequested) {
+              animateTypeInto(translationOutput, String(partialTranslation || ""), "translation");
+            }
+          },
+        });
+      }
     } else {
       var response = await fetch(BASE + "/api/translate-text.php", {
         method: "POST",
@@ -1085,12 +1501,38 @@ async function processTranscript(text, fromManual, mode) {
 
     clearTimeout(requestTimeout);
 
+    var srcCode = sourceSelect ? sourceSelect.value : "auto";
+    var tgtCode = targetSelect ? targetSelect.value : "es";
+
+    if (!shouldAcceptTranslation(text, translatedText, srcCode, tgtCode)) {
+      var providerFallback = await translateClientSideFallback(text, srcCode, tgtCode);
+      if (shouldAcceptTranslation(text, providerFallback, srcCode, tgtCode)) {
+        translatedText = providerFallback;
+      }
+    }
+
+    if (!shouldAcceptTranslation(text, translatedText, srcCode, tgtCode)) {
+      var optimistic = buildOptimisticPreview(text);
+      if (shouldAcceptTranslation(text, optimistic, srcCode, tgtCode)) {
+        translatedText = optimistic;
+      }
+    }
+
     if (!translatedText && !fromManual) {
       setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
       return;
     }
 
+    if (!shouldAcceptTranslation(text, translatedText, srcCode, tgtCode)) {
+      if (fromManual) {
+        throw new Error("No se obtuvo una traducción confiable. Cambia el proveedor a Auto o Google Free e intenta de nuevo.");
+      }
+      setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
+      return;
+    }
+
     if (fromManual) {
+      resetIncrementalTranslationState();
       var transcriptState = typewriterStates.transcript;
       stopTypewriter("transcript");
       transcriptState.raw = text;
@@ -1103,6 +1545,9 @@ async function processTranscript(text, fromManual, mode) {
       translationOutput.classList.add("streaming");
     } else {
       translationOutput.classList.remove("streaming");
+      if (!fromManual) {
+        lastIncrementalAddedCount = 0;
+      }
     }
 
     translationCommittedText = translatedText;
@@ -1112,6 +1557,7 @@ async function processTranscript(text, fromManual, mode) {
     if (translatedText) {
       lastAcceptedTranslation = translatedText;
     }
+    updateRuntimeStrip();
     setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
   } catch (error) {
     if (error && error.name === "AbortError") {
@@ -1216,13 +1662,15 @@ function startListening() {
 
   listeningRequested = true;
 
-  recognition = new SpeechRecognitionCtor();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 5;
-  recognition.lang = resolveRecognitionLang(sourceSelect.value);
+  initializeRecognitionInstance();
 
   recognition.onstart = function () {
+    clearRecognitionRestartTimer();
+    recognitionRestartAttempts = 0;
+    recognitionConsecutiveErrors = 0;
+    recognitionLastResultAt = Date.now();
+    recognitionLastRestartAt = Date.now();
+    startRecognitionWatchdog();
     listening = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
@@ -1230,22 +1678,56 @@ function startListening() {
   };
 
   recognition.onerror = function (event) {
-    showError("Error de reconocimiento: " + (event.error || "desconocido"));
+    var code = String(event && event.error ? event.error : "desconocido");
+
+    if (code === "aborted") {
+      if (!listeningRequested) {
+        return;
+      }
+      scheduleRecognitionRestart("error-aborted", 200);
+      return;
+    }
+
+    if (code === "no-speech") {
+      // Error comun cuando hay silencio; no lo elevamos como fallo critico.
+      recognitionConsecutiveErrors = 0;
+      showError("");
+      return;
+    }
+
+    if (code === "not-allowed" || code === "service-not-allowed") {
+      listeningRequested = false;
+      stopRecognitionWatchdog();
+      clearRecognitionRestartTimer();
+      listening = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus("error", "Permiso de microfono denegado");
+      showError("Permiso de micrófono denegado. Habilítalo y vuelve a intentar.");
+      return;
+    }
+
+    if (!listeningRequested) {
+      return;
+    }
+
+    recognitionConsecutiveErrors += 1;
+    showError("Error de reconocimiento: " + code + ". Reintentando...");
+    var extraDelay = recognitionConsecutiveErrors >= 3 ? 520 : 260;
+    scheduleRecognitionRestart("error-" + code, extraDelay);
   };
 
   recognition.onend = function () {
-    var pending = String(lastInterimChunk || "").trim();
-    if (pending) {
-      appendTranscriptChunk(pending);
-      lastInterimChunk = "";
-    }
+    clearInterimCommitTimer();
+    commitPendingInterim("onend");
 
     var transcriptNow = getTranscriptFieldText();
     if (transcriptNow) {
-      enqueueTranslation(transcriptNow, false, 0, "replace");
+      maybeEnqueueLiveTranslation(transcriptNow, true);
     }
 
     listening = false;
+    stopRecognitionWatchdog();
     if (!listeningRequested) {
       startBtn.disabled = false;
       stopBtn.disabled = true;
@@ -1254,23 +1736,7 @@ function startListening() {
       return;
     }
 
-    setStatus("processing", "Reconectando escucha...");
-    setTimeout(function () {
-      try {
-        recognition.start();
-      } catch (_e) {
-        setTimeout(function () {
-          try {
-            recognition.start();
-          } catch (_e2) {
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            listeningRequested = false;
-            setStatus("error", "No se pudo reanudar");
-          }
-        }, 240);
-      }
-    }, 120);
+    scheduleRecognitionRestart("onend", 140);
   };
 
   recognition.onresult = function (event) {
@@ -1284,8 +1750,10 @@ function startListening() {
     lastInterimChunk = interimChunk;
 
     if (finalChunk) {
+      clearInterimCommitTimer();
       appendTranscriptChunk(finalChunk);
       lastInterimChunk = "";
+      recognitionLastResultAt = Date.now();
       if (livePreviewDelayTimer) {
         clearTimeout(livePreviewDelayTimer);
         livePreviewDelayTimer = null;
@@ -1294,22 +1762,160 @@ function startListening() {
 
     renderTranscriptLive(interimChunk);
 
+    if (interimChunk) {
+      scheduleInterimCommitBySilence();
+    } else {
+      clearInterimCommitTimer();
+    }
+
     var transcriptNow = getTranscriptFieldText();
     if (!transcriptNow || transcriptNow.length < 2) {
       return;
     }
 
     // Requisito funcional: traducir siempre el contenido visible del textfield.
-    enqueueTranslation(transcriptNow, false, 0, "replace");
+    maybeEnqueueLiveTranslation(transcriptNow, false);
 
     lastInterimTranslateAt = Date.now();
+    recognitionLastResultAt = Date.now();
   };
 
   recognition.start();
 }
 
+function initializeRecognitionInstance() {
+  if (!SpeechRecognitionCtor) {
+    return;
+  }
+  if (recognition) {
+    try {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+    } catch (_e) {
+      // Ignorado.
+    }
+  }
+
+  recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 5;
+  recognition.lang = resolveRecognitionLang(sourceSelect.value);
+}
+
+function clearRecognitionRestartTimer() {
+  if (recognitionRestartTimer) {
+    clearTimeout(recognitionRestartTimer);
+    recognitionRestartTimer = null;
+  }
+}
+
+function stopRecognitionWatchdog() {
+  if (recognitionWatchdogTimer) {
+    clearInterval(recognitionWatchdogTimer);
+    recognitionWatchdogTimer = null;
+  }
+}
+
+function startRecognitionWatchdog() {
+  stopRecognitionWatchdog();
+  recognitionWatchdogTimer = setInterval(function () {
+    if (!listeningRequested || !listening) {
+      return;
+    }
+    var idleMs = Date.now() - Number(recognitionLastResultAt || 0);
+    if (idleMs < 13000) {
+      return;
+    }
+
+    // Intenta guardar interim antes de forzar reconexion.
+    commitPendingInterim("watchdog");
+
+    if ((Date.now() - recognitionLastRestartAt) < 850) {
+      return;
+    }
+
+    showError("Se detectó pausa en transcripción, reintentando captura...");
+    try {
+      if (recognition) {
+        recognition.stop();
+      }
+    } catch (_e) {
+      // Ignorado.
+    }
+    scheduleRecognitionRestart("watchdog", 220);
+  }, 3000);
+}
+
+function scheduleRecognitionRestart(reason, delayMs) {
+  if (!listeningRequested) {
+    return;
+  }
+
+  if ((Date.now() - recognitionLastRestartAt) < 250) {
+    return;
+  }
+
+  clearRecognitionRestartTimer();
+  stopRecognitionWatchdog();
+  setStatus("processing", "Reconectando escucha...");
+
+  recognitionRestartAttempts += 1;
+  var maxAttempts = 14;
+  if (recognitionRestartAttempts > maxAttempts) {
+    listeningRequested = false;
+    listening = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus("error", "No se pudo reanudar");
+    showError("La transcripción se detuvo y no logró reconectar. Presiona Iniciar escucha.");
+    return;
+  }
+
+  var backoff = Math.min(1800, Math.max(120, Number(delayMs || 180)) + (recognitionRestartAttempts - 1) * 120);
+  recognitionRestartTimer = setTimeout(function () {
+    if (!listeningRequested) {
+      return;
+    }
+    recognitionLastRestartAt = Date.now();
+    try {
+      if (!recognition) {
+        initializeRecognitionInstance();
+      }
+      if (recognition) {
+        recognition.lang = resolveRecognitionLang(sourceSelect.value);
+        recognition.start();
+        return;
+      }
+    } catch (_e) {
+      // Intenta recrear la instancia y arrancar una vez mas.
+    }
+
+    try {
+      initializeRecognitionInstance();
+      if (recognition) {
+        recognition.start();
+        return;
+      }
+    } catch (_e2) {
+      // Sigue al siguiente intento.
+    }
+
+    scheduleRecognitionRestart(reason + "-retry", backoff + 140);
+  }, backoff);
+}
+
 function stopListening() {
   listeningRequested = false;
+  lastIncrementalAddedCount = 0;
+  recognitionConsecutiveErrors = 0;
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  recognitionRestartAttempts = 0;
+  resetLiveEnqueueState();
   if (livePreviewDelayTimer) {
     clearTimeout(livePreviewDelayTimer);
     livePreviewDelayTimer = null;
@@ -1317,17 +1923,11 @@ function stopListening() {
   lastRenderedLiveSource = "";
   liveTranslationPreviewText = "";
   animateTypeInto(translationOutput, translationCommittedText, "translation");
-  var pending = String(lastInterimChunk || "").trim();
-  var normalizedPending = normalizeFlatText(pending);
-  var normalizedCurrent = normalizeFlatText(transcriptForTranslation);
-  if (pending && (!normalizedCurrent || normalizedCurrent.indexOf(normalizedPending) === -1)) {
-    appendTranscriptChunk(pending);
-    lastInterimChunk = "";
-  }
+  commitPendingInterim("stop");
 
   var transcriptNow = getTranscriptFieldText();
   if (transcriptNow) {
-    enqueueTranslation(transcriptNow, false, 0, "replace");
+    maybeEnqueueLiveTranslation(transcriptNow, true);
   }
 
   if (recognition) {
@@ -1338,6 +1938,15 @@ function stopListening() {
 function clearOutputs() {
   stopTypewriter("transcript");
   stopTypewriter("translation");
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  recognitionRestartAttempts = 0;
+  recognitionLastResultAt = 0;
+  recognitionConsecutiveErrors = 0;
+  lastIncrementalAddedCount = 0;
+  resetLiveEnqueueState();
+  resetIncrementalTranslationState();
   transcriptCommittedText = "";
   transcriptForTranslation = "";
   typewriterStates.transcript.raw = "";
@@ -1370,6 +1979,7 @@ function swapLanguages() {
   var source = sourceSelect.value;
   sourceSelect.value = targetSelect.value;
   targetSelect.value = source;
+  resetIncrementalTranslationState();
 
   if (recognition && listening) {
     recognition.lang = resolveRecognitionLang(sourceSelect.value);
