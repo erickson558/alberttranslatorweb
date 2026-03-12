@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.10
+Version actual: V1.5.11
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
@@ -89,6 +89,9 @@ El workflow en .github/workflows/release.yml se ejecuta en cada push a main y:
 - Valida formato Vx.x.x.
 - Crea o valida el tag correspondiente en el commit actual.
 - Publica/actualiza el GitHub Release con esa version.
+
+Checklist recomendada antes de publicar:
+- RELEASE_CHECKLIST.md
 
 Regla operativa recomendada:
 - Cada commit a main debe incluir incremento de VERSION si representa una nueva entrega.

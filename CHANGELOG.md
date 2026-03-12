@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.11] - 2026-03-12
+### Added
+- Release checklist versionada en `RELEASE_CHECKLIST.md` para estandarizar pre-publicacion en `main`.
+
+### Changed
+- README actualizado para enlazar la checklist de release en la seccion de publicaciones automaticas.
+- Synchronized version to V1.5.11 across VERSION, APP runtime config, and README.
+
 ## [V1.5.10] - 2026-03-12
 ### Added
 - Exportacion TXT configurable por alcance: ambos paneles, solo transcripcion o solo traduccion.
