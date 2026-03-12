@@ -108,6 +108,7 @@ let lastIncrementalAddedCount = 0;
 let prefersReducedMotion = false;
 let lastLiveEnqueueTextNorm = "";
 let lastLiveEnqueueAt = 0;
+let uiPrefsWereRestored = false;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
@@ -420,6 +421,11 @@ function wireEvents() {
   if (exportTxtBtn) {
     exportTxtBtn.addEventListener("click", exportConversationToTxt);
   }
+  if (exportScopeRadios && exportScopeRadios.length) {
+    for (var exportIndex = 0; exportIndex < exportScopeRadios.length; exportIndex += 1) {
+      exportScopeRadios[exportIndex].addEventListener("change", persistUiPreferences);
+    }
+  }
   swapBtn.addEventListener("click", swapLanguages);
   document.addEventListener("keydown", handleGlobalShortcuts);
 
@@ -540,6 +546,7 @@ function persistUiPreferences() {
   var prefs = {
     sourceLanguage: sourceSelect ? sourceSelect.value : "en",
     targetLanguage: targetSelect ? targetSelect.value : "es",
+    exportScope: getSelectedExportScope(),
     provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
     typingProfile: typingProfileSelect ? typingProfileSelect.value : "normal",
     typingSpeed: typingSpeedDial ? String(typingSpeedDial.value || "62") : "62",
@@ -593,11 +600,16 @@ function restoreUiPreferences() {
     return;
   }
 
+  uiPrefsWereRestored = true;
+
   if (sourceSelect && typeof prefs.sourceLanguage === "string") {
     sourceSelect.value = prefs.sourceLanguage;
   }
   if (targetSelect && typeof prefs.targetLanguage === "string") {
     targetSelect.value = prefs.targetLanguage;
+  }
+  if (typeof prefs.exportScope === "string") {
+    setSelectedExportScope(prefs.exportScope);
   }
   if (translationProviderSelect && typeof prefs.provider === "string") {
     translationProviderSelect.value = prefs.provider;
@@ -628,9 +640,17 @@ function restoreUiPreferences() {
     typingSpeedValue.textContent = String(typingSpeedDial.value || "62");
   }
   syncProfileFromControls();
+
+  window.setTimeout(function () {
+    if (!uiPrefsWereRestored) {
+      return;
+    }
+    showToast("Preferencias restauradas", "ok");
+  }, 80);
 }
 
 function applyDefaultUiPreferences() {
+  setSelectedExportScope("both");
   if (translationProviderSelect) {
     translationProviderSelect.value = "google-free";
   }
@@ -1712,23 +1732,12 @@ async function checkHealth() {
   }
 }
 
-function startListening() {
-  showError("");
-  if (!SpeechRecognitionCtor) {
-    showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
+function bindRecognitionHandlers(recognitionInstance) {
+  if (!recognitionInstance) {
     return;
   }
 
-  if (listening) {
-    return;
-  }
-
-  listeningRequested = true;
-  recognitionLastEventAt = Date.now();
-
-  initializeRecognitionInstance();
-
-  recognition.onstart = function () {
+  recognitionInstance.onstart = function () {
     clearRecognitionRestartTimer();
     recognitionRestartAttempts = 0;
     recognitionConsecutiveErrors = 0;
@@ -1742,7 +1751,7 @@ function startListening() {
     setStatus("listening", "Escuchando en vivo");
   };
 
-  recognition.onerror = function (event) {
+  recognitionInstance.onerror = function (event) {
     recognitionLastEventAt = Date.now();
     var code = String(event && event.error ? event.error : "desconocido");
 
@@ -1755,7 +1764,6 @@ function startListening() {
     }
 
     if (code === "no-speech") {
-      // Error comun cuando hay silencio; no lo elevamos como fallo critico.
       recognitionConsecutiveErrors = 0;
       showError("");
       return;
@@ -1783,7 +1791,7 @@ function startListening() {
     scheduleRecognitionRestart("error-" + code, extraDelay);
   };
 
-  recognition.onend = function () {
+  recognitionInstance.onend = function () {
     recognitionLastEventAt = Date.now();
     clearInterimCommitTimer();
     commitPendingInterim("onend");
@@ -1806,7 +1814,7 @@ function startListening() {
     scheduleRecognitionRestart("onend", 140);
   };
 
-  recognition.onresult = function (event) {
+  recognitionInstance.onresult = function (event) {
     recognitionLastEventAt = Date.now();
     var parsed = null;
     if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.parseRecognitionEvent) {
@@ -1841,12 +1849,29 @@ function startListening() {
       return;
     }
 
-    // Requisito funcional: traducir siempre el contenido visible del textfield.
     maybeEnqueueLiveTranslation(transcriptNow, false);
 
     lastInterimTranslateAt = Date.now();
     recognitionLastResultAt = Date.now();
   };
+}
+
+function startListening() {
+  showError("");
+  if (!SpeechRecognitionCtor) {
+    showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
+    return;
+  }
+
+  if (listening) {
+    return;
+  }
+
+  listeningRequested = true;
+  recognitionLastEventAt = Date.now();
+
+  initializeRecognitionInstance();
+  bindRecognitionHandlers(recognition);
 
   recognition.start();
 }
@@ -1998,6 +2023,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
         initializeRecognitionInstance();
       }
       if (recognition) {
+        bindRecognitionHandlers(recognition);
         recognition.lang = resolveRecognitionLang(sourceSelect.value);
         recognition.start();
         return;
@@ -2009,6 +2035,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
     try {
       initializeRecognitionInstance();
       if (recognition) {
+        bindRecognitionHandlers(recognition);
         recognition.start();
         return;
       }
@@ -2132,6 +2159,25 @@ function getSelectedExportScope() {
     }
   }
   return "both";
+}
+
+function setSelectedExportScope(scope) {
+  var normalized = String(scope || "both").toLowerCase();
+  var found = false;
+
+  if (!exportScopeRadios || !exportScopeRadios.length) {
+    return;
+  }
+
+  for (var i = 0; i < exportScopeRadios.length; i += 1) {
+    var isMatch = String(exportScopeRadios[i].value || "both").toLowerCase() === normalized;
+    exportScopeRadios[i].checked = isMatch;
+    found = found || isMatch;
+  }
+
+  if (!found) {
+    exportScopeRadios[0].checked = true;
+  }
 }
 
 function buildConversationDefaultFilename(scope) {
