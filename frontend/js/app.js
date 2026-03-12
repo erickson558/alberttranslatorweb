@@ -1039,26 +1039,42 @@ async function processTranscript(text, fromManual, mode) {
   }, requestTimeoutMs);
 
   try {
-    var response = await fetch(BASE + "/api/translate-text.php", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        transcript: text,
-        source_language: sourceSelect.value,
-        target_language: targetSelect.value,
-        translation_provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
-      }),
-      signal: requestController.signal,
-    });
+    var translatedText = "";
+    if (window.AlbertTranslationEngine && typeof window.AlbertTranslationEngine.translateByPhrases === "function") {
+      translatedText = await window.AlbertTranslationEngine.translateByPhrases({
+        baseUrl: BASE,
+        text: text,
+        sourceLanguage: sourceSelect.value,
+        targetLanguage: targetSelect.value,
+        provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
+        signal: requestController.signal,
+        onSegment: function (partialTranslation) {
+          if (!fromManual && listeningRequested) {
+            animateTypeInto(translationOutput, String(partialTranslation || ""), "translation");
+          }
+        },
+      });
+    } else {
+      var response = await fetch(BASE + "/api/translate-text.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: text,
+          source_language: sourceSelect.value,
+          target_language: targetSelect.value,
+          translation_provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
+        }),
+        signal: requestController.signal,
+      });
 
-    clearTimeout(requestTimeout);
-
-    var payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || ("HTTP " + response.status));
+      var payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || ("HTTP " + response.status));
+      }
+      translatedText = String(payload.translation || "").trim();
     }
 
-    var translatedText = String(payload.translation || "").trim();
+    clearTimeout(requestTimeout);
 
     if (!translatedText && !fromManual) {
       setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
@@ -1355,6 +1371,9 @@ function clearOutputs() {
   queuedTranslationFromManual = false;
   translateInFlight = false;
   lastInterimChunk = "";
+  if (window.AlbertTranslationEngine && typeof window.AlbertTranslationEngine.clearCache === "function") {
+    window.AlbertTranslationEngine.clearCache();
+  }
   manualInput.value = "";
   showError("");
   setStatus("idle", "Inactivo");

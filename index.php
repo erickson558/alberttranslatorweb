@@ -117,6 +117,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       appVersion: <?php echo json_encode(APP_VERSION); ?>,
     };
   </script>
+  <script src="./frontend/js/translation-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/app.js?v=<?php echo (int)$jsVersion; ?>"></script>
 </body>
 </html>

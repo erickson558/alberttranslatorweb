@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.7] - 2026-03-12
+### Changed
+- Extracted translation flow to `frontend/js/translation-engine.js`.
+- Updated frontend to translate incrementally by phrases/sentences while preserving UI animation.
+- Kept app orchestration in `frontend/js/app.js` and delegated translation requests to the new engine.
+- Synchronized version to V1.5.7 across VERSION, runtime APP_VERSION, and README.
+
 ## [V1.5.6] - 2026-03-12
 ### Fixed
 - Kept translation typewriter animation while rendering live transcript instantly to avoid lag, dropped phrases, and disappearing interim text.
