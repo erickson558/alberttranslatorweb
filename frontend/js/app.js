@@ -394,26 +394,8 @@ function getLiveStabilityDelayMs() {
 }
 
 function scheduleLivePreviewTranslation(liveTranscript) {
-  var text = String(liveTranscript || "").trim();
-  if (!text) {
-    return;
-  }
-
-  if (livePreviewDelayTimer) {
-    clearTimeout(livePreviewDelayTimer);
-    livePreviewDelayTimer = null;
-  }
-
-  var delayMs = getLiveStabilityDelayMs();
-  livePreviewDelayTimer = setTimeout(function () {
-    var normalizedLive = normalizeFlatText(text);
-    if (!normalizedLive || normalizedLive === lastRenderedLiveSource) {
-      return;
-    }
-    lastRenderedLiveSource = normalizedLive;
-    lastInterimTranslateAt = Date.now();
-    enqueueTranslation(text, false, getLivePreviewDebounceMs(), "preview");
-  }, delayMs);
+  // Deshabilitado para evitar mezcla de idiomas por previsualizaciones parciales.
+  return;
 }
 
 function localWordByWordTranslate(text, dictionary) {
@@ -707,16 +689,9 @@ function enqueueTranslation(text, fromManual, priorityMs, mode) {
   }
 
   var waitMs = typeof priorityMs === "number" ? priorityMs : (fromManual ? 0 : 10);
-  var queueMode = String(mode || "replace").toLowerCase();
+  var queueMode = "replace";
 
-  if (!fromManual && (queueMode === "replace" || queueMode === "preview")) {
-    var optimistic = buildOptimisticPreview(text);
-    if (optimistic) {
-      renderTranslationPreview(optimistic);
-    }
-  }
-
-  if (!fromManual && (queueMode === "replace" || queueMode === "preview") && translateInFlight) {
+  if (!fromManual && translateInFlight) {
     if (activeTranslationController) {
       try {
         activeTranslationController.abort();
@@ -726,54 +701,17 @@ function enqueueTranslation(text, fromManual, priorityMs, mode) {
     }
   }
 
-  // Mientras transcribe, cancela preview viejo y deja pasar el preview nuevo.
-  if (!fromManual && queueMode === "preview" && translateInFlight && activeTranslationMode === "preview") {
-    if (activeTranslationController) {
-      try {
-        activeTranslationController.abort();
-      } catch (_eAbort) {
-        // Ignorado.
-      }
-    }
-  }
-
   translateDebounceTimer = setTimeout(function () {
     var incomingText = String(text || "").trim();
     var incomingManual = fromManual === true;
-    var incomingMode = queueMode;
 
     if (!incomingText) {
       return;
     }
 
-    var currentMode = String(queuedTranslationMode || "replace");
-    var currentHasText = String(queuedTranslationText || "").trim().length > 0;
-
-    // Prioridad: manual > append > replace > preview
-    var score = function (isManual, m) {
-      if (isManual) {
-        return 4;
-      }
-      if (m === "append") {
-        return 3;
-      }
-      if (m === "replace") {
-        return 2;
-      }
-      return 1;
-    };
-
-    var incomingScore = score(incomingManual, incomingMode);
-    var currentScore = score(queuedTranslationFromManual === true, currentMode);
-
-    // Evita que previews pisen traducciones finales/manuales ya en cola.
-    if (currentHasText && incomingScore < currentScore) {
-      return;
-    }
-
     queuedTranslationText = incomingText;
     queuedTranslationFromManual = incomingManual;
-    queuedTranslationMode = incomingMode;
+    queuedTranslationMode = queueMode;
     drainTranslationQueue();
   }, waitMs);
 }
@@ -820,11 +758,6 @@ function scheduleTypedTranslation(text) {
     liveTranslationPreviewText = "";
     animateTypeInto(translationOutput, "", "translation");
     return;
-  }
-
-  var optimistic = buildOptimisticPreview(sourceText);
-  if (optimistic) {
-    renderTranslationPreview(optimistic);
   }
 
   typedTranslateDebounceTimer = setTimeout(function () {
@@ -1081,14 +1014,14 @@ function pickBestSpeechAlternative(result) {
 }
 
 async function processTranscript(text, fromManual, mode) {
-  var translationMode = String(mode || "replace").toLowerCase();
+  var translationMode = "replace";
 
   if (fromManual) {
     setStatus("processing", "Traduciendo...");
   }
   showError("");
 
-  var requestTimeoutMs = fromManual ? 14000 : (translationMode === "preview" ? 4500 : 9000);
+  var requestTimeoutMs = fromManual ? 14000 : 9000;
   var requestController = new AbortController();
   activeTranslationController = requestController;
   var requestTimeout = setTimeout(function () {
@@ -1096,13 +1029,6 @@ async function processTranscript(text, fromManual, mode) {
   }, requestTimeoutMs);
 
   try {
-    var isPreviewMode = translationMode === "preview";
-    var acceptTranslation = function (originalText, candidateText) {
-      return isPreviewMode
-        ? shouldAcceptPreviewTranslation(originalText, candidateText, sourceSelect.value, targetSelect.value)
-        : shouldAcceptTranslation(originalText, candidateText, sourceSelect.value, targetSelect.value);
-    };
-
     var response = await fetch(BASE + "/api/translate-text.php", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1122,42 +1048,7 @@ async function processTranscript(text, fromManual, mode) {
       throw new Error(payload.error || ("HTTP " + response.status));
     }
 
-    var apiTranslation = String(payload.translation || "");
-    var translatedText = apiTranslation;
-    if (!acceptTranslation(text, translatedText)) {
-      var fallback = await translateClientSideFallback(text, sourceSelect.value, targetSelect.value);
-      if (acceptTranslation(text, fallback)) {
-        translatedText = fallback;
-      }
-    }
-
-    if (!acceptTranslation(text, translatedText)) {
-      var fallbackAuto = await translateClientSideFallback(text, "auto", targetSelect.value);
-      if (acceptTranslation(text, fallbackAuto)) {
-        translatedText = fallbackAuto;
-      }
-    }
-
-    if (!acceptTranslation(text, translatedText)) {
-      if (translationMode === "append" && !fromManual) {
-        // En vivo prioriza no quedarse en blanco: usa API si al menos cambio algo.
-        translatedText = isEffectiveClientTranslation(text, apiTranslation, sourceSelect.value, targetSelect.value)
-          ? apiTranslation
-          : "";
-      } else {
-        if (fromManual) {
-          translatedText = String(apiTranslation || "").trim() || String(text || "").trim();
-        } else {
-          translatedText = lastAcceptedTranslation || "";
-        }
-      }
-    }
-
-    if (!translatedText && !fromManual) {
-      if (translationMode === "preview") {
-        translatedText = String(apiTranslation || "").trim() || String(text || "").trim();
-      }
-    }
+    var translatedText = String(payload.translation || "").trim();
 
     if (!translatedText && !fromManual) {
       setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
@@ -1171,28 +1062,17 @@ async function processTranscript(text, fromManual, mode) {
       transcriptOutput.value = text;
       autoScrollToEnd(transcriptOutput);
       transcriptForTranslation = text;
-      translationCommittedText = "";
-      liveTranslationPreviewText = "";
     }
 
-    if (listeningRequested && !fromManual && translationMode !== "append") {
+    if (listeningRequested && !fromManual) {
       translationOutput.classList.add("streaming");
     } else {
       translationOutput.classList.remove("streaming");
     }
 
-    if (translationMode === "append" && !fromManual) {
-      liveTranslationPreviewText = "";
-      appendTranslationChunk(translatedText);
-    } else if (translationMode === "preview" && !fromManual) {
-      renderTranslationPreview(translatedText);
-    } else {
-      if (fromManual) {
-        translationCommittedText = translatedText;
-        liveTranslationPreviewText = "";
-      }
-      animateTypeInto(translationOutput, translatedText, "translation");
-    }
+    translationCommittedText = translatedText;
+    liveTranslationPreviewText = "";
+    animateTypeInto(translationOutput, translatedText, "translation");
 
     if (translatedText) {
       lastAcceptedTranslation = translatedText;
@@ -1414,11 +1294,7 @@ function startListening() {
     // Requisito funcional: traducir siempre el contenido visible del textfield.
     enqueueTranslation(transcriptNow, false, 0, "replace");
 
-    var now = Date.now();
-    var minLiveInterval = getLivePreviewIntervalMs();
-    if ((now - lastInterimTranslateAt) >= minLiveInterval) {
-      scheduleLivePreviewTranslation(transcriptNow);
-    }
+    lastInterimTranslateAt = Date.now();
   };
 
   recognition.start();

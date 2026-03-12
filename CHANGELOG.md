@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.5] - 2026-03-12
+### Fixed
+- Removed live preview/local fallback path in frontend translation flow that could leave mixed EN/ES text in the translation box.
+- Forced live translation to render only final API translation for the full visible transcript text.
+
+### Changed
+- Synchronized version to V1.5.5 across VERSION, APP runtime config, and repository documentation.
+
 ## [V1.5.4] - 2026-03-11
 ### Changed
 - Incremented release version to keep APP, repository tags, and GitHub Releases aligned with the one-version-per-commit policy.
