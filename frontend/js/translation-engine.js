@@ -23,12 +23,15 @@
     var segments = [];
     for (var i = 0; i < lines.length; i += 1) {
       var line = lines[i];
-      var parts = line
-        .split(/(?<=[.!?;:])\s+/)
-        .map(function (piece) {
-          return piece.trim();
-        })
-        .filter(Boolean);
+      var parts = [];
+      var regex = /[^.!?;:]+[.!?;:]?|[.!?;:]+/g;
+      var match = null;
+      while ((match = regex.exec(line)) !== null) {
+        var piece = String(match[0] || "").trim();
+        if (piece) {
+          parts.push(piece);
+        }
+      }
 
       if (!parts.length) {
         segments.push(line);
@@ -96,16 +99,34 @@
       if (segmentCache.has(cacheKey)) {
         translated = segmentCache.get(cacheKey);
       } else {
-        translated = await translateSegment(
-          baseUrl,
-          {
-            transcript: segment,
-            source_language: source,
-            target_language: target,
-            translation_provider: provider,
-          },
-          signal
-        );
+        try {
+          translated = await translateSegment(
+            baseUrl,
+            {
+              transcript: segment,
+              source_language: source,
+              target_language: target,
+              translation_provider: provider,
+            },
+            signal
+          );
+        } catch (_segmentError) {
+          // Fallback puntual por segmento para mantener flujo incremental.
+          try {
+            translated = await translateSegment(
+              baseUrl,
+              {
+                transcript: segment,
+                source_language: source,
+                target_language: target,
+                translation_provider: "google-free",
+              },
+              signal
+            );
+          } catch (_fallbackError) {
+            translated = segment;
+          }
+        }
         segmentCache.set(cacheKey, translated);
       }
 

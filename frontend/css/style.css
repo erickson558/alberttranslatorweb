@@ -399,6 +399,40 @@ textarea.streaming {
   color: var(--muted);
 }
 
+.copy-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+  padding: 0.62rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: #f7fbff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  transition: opacity .18s ease, transform .2s ease;
+  box-shadow: 0 10px 30px rgba(3, 7, 22, 0.55);
+}
+
+.copy-toast.ok {
+  background: linear-gradient(120deg, rgba(49, 208, 155, 0.9), rgba(41, 182, 246, 0.9));
+  border-color: rgba(49, 208, 155, 0.55);
+}
+
+.copy-toast.warn {
+  background: linear-gradient(120deg, rgba(255, 91, 127, 0.92), rgba(255, 200, 87, 0.9));
+  border-color: rgba(255, 91, 127, 0.58);
+}
+
+.copy-toast.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
 @media (max-width: 900px) {
   .language-bar {
     grid-template-columns: 1fr;
@@ -427,5 +461,12 @@ textarea.streaming {
 
   .typing-profile {
     width: min(35vw, 150px);
+  }
+
+  .copy-toast {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+    text-align: center;
   }
 }

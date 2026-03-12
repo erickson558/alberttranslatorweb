@@ -80,6 +80,8 @@ let queuedTranslationText = "";
 let queuedTranslationFromManual = false;
 let queuedTranslationMode = "replace";
 let lastInterimChunk = "";
+let toastTimer = null;
+let toastEl = null;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
@@ -495,31 +497,78 @@ function showError(message) {
   errorBox.textContent = message;
 }
 
+function ensureToastElement() {
+  if (toastEl && document.body.contains(toastEl)) {
+    return toastEl;
+  }
+
+  toastEl = document.createElement("div");
+  toastEl.className = "copy-toast";
+  toastEl.setAttribute("role", "status");
+  toastEl.setAttribute("aria-live", "polite");
+  toastEl.setAttribute("aria-atomic", "true");
+  document.body.appendChild(toastEl);
+  return toastEl;
+}
+
+function showToast(message, tone) {
+  var el = ensureToastElement();
+  el.textContent = String(message || "");
+  el.classList.remove("ok", "warn", "show");
+  el.classList.add(tone === "warn" ? "warn" : "ok");
+
+  // Reinicia animacion para toasts consecutivos.
+  void el.offsetWidth;
+  el.classList.add("show");
+
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+  }
+
+  toastTimer = setTimeout(function () {
+    if (!toastEl) {
+      return;
+    }
+    toastEl.classList.remove("show");
+  }, 1600);
+}
+
 function autoScrollToEnd(textarea) {
   textarea.scrollTop = textarea.scrollHeight;
 }
 
 function appendTranscriptChunk(chunk) {
-  var normalizedChunk = normalizeQuestionPunctuation(String(chunk || "").trim(), sourceSelect.value);
-  if (!normalizedChunk) {
+  if (!(window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.appendTranscriptChunk)) {
     return;
   }
 
-  if (transcriptCommittedText) {
-    transcriptCommittedText += "\n";
-  }
-  transcriptCommittedText += normalizedChunk;
-  transcriptForTranslation = transcriptForTranslation
-    ? (transcriptForTranslation + " " + normalizedChunk)
-    : normalizedChunk;
+  var next = window.AlbertTranscriptionEngine.appendTranscriptChunk(
+    {
+      committedText: transcriptCommittedText,
+      forTranslation: transcriptForTranslation,
+    },
+    chunk,
+    sourceSelect.value
+  );
+
+  transcriptCommittedText = String(next.committedText || "");
+  transcriptForTranslation = String(next.forTranslation || "");
   animateTypeInto(transcriptOutput, transcriptCommittedText, "transcript");
 }
 
 function renderTranscriptLive(interimText) {
-  var normalizedInterim = normalizeQuestionPunctuation(String(interimText || "").trim(), sourceSelect.value);
-  var text = transcriptCommittedText;
-  if (normalizedInterim) {
-    text = text ? (text + "\n" + normalizedInterim) : normalizedInterim;
+  if (!(window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.renderTranscriptLive)) {
+    return;
+  }
+
+  var rendered = window.AlbertTranscriptionEngine.renderTranscriptLive(
+    transcriptCommittedText,
+    interimText,
+    sourceSelect.value
+  );
+
+  var text = String(rendered.displayText || "");
+  if (rendered.hasInterim) {
     transcriptOutput.classList.add("streaming");
   } else {
     transcriptOutput.classList.remove("streaming");
@@ -897,33 +946,10 @@ function shouldAcceptPreviewTranslation(original, translated, source, target) {
 }
 
 function normalizeQuestionPunctuation(text, langCode) {
-  var raw = String(text || "").trim();
-  if (!raw) {
-    return "";
+  if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.normalizeQuestionPunctuation) {
+    return window.AlbertTranscriptionEngine.normalizeQuestionPunctuation(text, langCode);
   }
-
-  // Respeta puntuacion ya existente.
-  if (/[?？]$/.test(raw) || /[.!]$/.test(raw)) {
-    return raw;
-  }
-
-  var compact = raw.replace(/\s+/g, " ").trim();
-  var normalizedLang = String(langCode || "").toLowerCase();
-  var lower = compact.toLowerCase();
-
-  var englishQuestion = /^(who|what|when|where|why|how|is|are|am|do|does|did|can|could|would|should|will|have|has|had|may)\b/.test(lower);
-  var spanishQuestion = /^(que|qué|como|cómo|cuando|cuándo|donde|dónde|por que|por qué|quien|quién|cual|cuál|cuanto|cuánto|puedes|puede|podrias|podrías|deberia|debería|es|son|esta|está|hay|tienes|tiene|vamos|podemos)\b/.test(lower);
-
-  if (!englishQuestion && !spanishQuestion) {
-    return compact;
-  }
-
-  if (normalizedLang === "es") {
-    return "¿" + compact.replace(/^¿+/, "").replace(/\?+$/, "") + "?";
-  }
-
-  // Para origen auto o ingles, usa signo final.
-  return compact + "?";
+  return String(text || "").trim();
 }
 
 function renderTranslationPreview(translatedPreview) {
@@ -1000,27 +1026,10 @@ function appendTranslationChunk(chunk) {
 }
 
 function pickBestSpeechAlternative(result) {
-  if (!result || typeof result.length !== "number" || result.length < 1) {
-    return "";
+  if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.pickBestSpeechAlternative) {
+    return window.AlbertTranscriptionEngine.pickBestSpeechAlternative(result);
   }
-
-  var bestText = "";
-  var bestScore = -1;
-  for (var i = 0; i < result.length; i += 1) {
-    var alt = result[i];
-    var t = String((alt && alt.transcript) || "").trim();
-    if (!t) {
-      continue;
-    }
-    var confidence = typeof alt.confidence === "number" ? alt.confidence : 0;
-    var score = confidence * 2 + (t.length / 80);
-    if (score > bestScore) {
-      bestScore = score;
-      bestText = t;
-    }
-  }
-
-  return bestText;
+  return "";
 }
 
 async function processTranscript(text, fromManual, mode) {
@@ -1265,40 +1274,13 @@ function startListening() {
   };
 
   recognition.onresult = function (event) {
-    var finalChunk = "";
-    var interimChunk = "";
-    for (var i = event.resultIndex; i < event.results.length; i += 1) {
-      var result = event.results[i];
-      var text = pickBestSpeechAlternative(result);
-      if (!text) {
-        text = String((result[0] && result[0].transcript) || "").trim();
-      }
-      if (!text) {
-        continue;
-      }
-      if (result.isFinal) {
-        finalChunk += " " + text;
-      }
+    var parsed = null;
+    if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.parseRecognitionEvent) {
+      parsed = window.AlbertTranscriptionEngine.parseRecognitionEvent(event);
     }
 
-    // Reconstruye interim completo para evitar saltos/perdida visual de palabras.
-    for (var j = 0; j < event.results.length; j += 1) {
-      var fullResult = event.results[j];
-      if (fullResult.isFinal) {
-        continue;
-      }
-      var interimText = pickBestSpeechAlternative(fullResult);
-      if (!interimText) {
-        interimText = String((fullResult[0] && fullResult[0].transcript) || "").trim();
-      }
-      if (!interimText) {
-        continue;
-      }
-      interimChunk += " " + interimText;
-    }
-
-    finalChunk = finalChunk.trim();
-    interimChunk = interimChunk.trim();
+    var finalChunk = String(parsed && parsed.finalChunk ? parsed.finalChunk : "").trim();
+    var interimChunk = String(parsed && parsed.interimChunk ? parsed.interimChunk : "").trim();
     lastInterimChunk = interimChunk;
 
     if (finalChunk) {
@@ -1397,33 +1379,10 @@ function swapLanguages() {
 }
 
 function resolveRecognitionLang(code) {
-  var aliases = {
-    ar: "ar-SA",
-    de: "de-DE",
-    el: "el-GR",
-    en: "en-US",
-    es: "es-ES",
-    fr: "fr-FR",
-    he: "he-IL",
-    hi: "hi-IN",
-    it: "it-IT",
-    ja: "ja-JP",
-    ko: "ko-KR",
-    nl: "nl-NL",
-    pl: "pl-PL",
-    pt: "pt-PT",
-    ru: "ru-RU",
-    sv: "sv-SE",
-    tr: "tr-TR",
-    uk: "uk-UA",
-    zh: "zh-CN",
-  };
-
-  var normalized = String(code || "").trim().toLowerCase();
-  if (!normalized || normalized === "auto") {
-    return "en-US";
+  if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.resolveRecognitionLang) {
+    return window.AlbertTranscriptionEngine.resolveRecognitionLang(code);
   }
-  return aliases[normalized] || (normalized + "-" + normalized.toUpperCase());
+  return "en-US";
 }
 
 function resolveSpeechLang(code) {
@@ -1458,12 +1417,15 @@ async function copyText(value) {
   var text = stripVisualCursor(value);
   if (!text) {
     showError("No hay texto para copiar.");
+    showToast("No hay texto para copiar", "warn");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(text);
+    showToast("Texto copiado", "ok");
   } catch (_e) {
     showError("No se pudo copiar al portapapeles.");
+    showToast("No se pudo copiar", "warn");
   }
 }

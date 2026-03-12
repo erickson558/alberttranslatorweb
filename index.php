@@ -36,6 +36,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
         <select id="translation-provider">
           <option value="auto">Auto (recomendado)</option>
           <option value="google-free" selected>Google Free</option>
+          <option value="libretranslate-free">LibreTranslate Free</option>
           <option value="mymemory-free">MyMemory Free</option>
         </select>
       </div>
@@ -117,6 +118,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       appVersion: <?php echo json_encode(APP_VERSION); ?>,
     };
   </script>
+  <script src="./frontend/js/transcription-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/translation-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/app.js?v=<?php echo (int)$jsVersion; ?>"></script>
 </body>

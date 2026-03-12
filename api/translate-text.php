@@ -43,7 +43,7 @@ if ($source !== 'auto' && !is_valid_lang($source)) {
     send_json(['error' => 'Codigo de idioma origen invalido.'], 400);
 }
 
-$allowedProviders = ['auto', 'google-free', 'mymemory-free'];
+$allowedProviders = ['auto', 'google-free', 'libretranslate-free', 'mymemory-free'];
 if (!in_array($provider, $allowedProviders, true)) {
     send_json(['error' => 'Proveedor de traduccion invalido.'], 400);
 }

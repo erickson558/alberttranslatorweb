@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.8] - 2026-03-12
+### Fixed
+- Hardened phrase/sentence translation engine for browser compatibility (removed lookbehind regex usage).
+- Added robust per-segment fallback to avoid full translation failure when one segment request fails.
+
+### Changed
+- Extracted transcription logic into `frontend/js/transcription-engine.js` and delegated recognition parsing/helpers from `app.js`.
+- Added free online provider option `libretranslate-free` and integrated it in API/backend translation flow.
+- Added copy feedback toast UI for transcript/translation textfields.
+- Synchronized version to V1.5.8 across VERSION, runtime APP_VERSION, and README.
+
 ## [V1.5.7] - 2026-03-12
 ### Changed
 - Extracted translation flow to `frontend/js/translation-engine.js`.

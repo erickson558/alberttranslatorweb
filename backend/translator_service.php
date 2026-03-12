@@ -500,6 +500,86 @@ function translate_with_mymemory($transcript, $source, $target)
     return '';
 }
 
+function translate_with_libretranslate_free($transcript, $source, $target)
+{
+    $text = trim((string)$transcript);
+    if ($text === '') {
+        return '';
+    }
+
+    $src = strtolower((string)$source) === 'auto' ? 'auto' : strtolower((string)$source);
+    $tgt = strtolower((string)$target);
+    $endpoints = [
+        'https://libretranslate.de/translate',
+        'https://translate.argosopentech.com/translate',
+    ];
+
+    $postData = http_build_query([
+        'q' => $text,
+        'source' => $src,
+        'target' => $tgt,
+        'format' => 'text',
+    ]);
+
+    foreach ($endpoints as $endpoint) {
+        $response = false;
+        $httpCode = 0;
+
+        if (function_exists('curl_init')) {
+            $ch = curl_init($endpoint);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => TRANSLATION_TIMEOUT_SEC,
+                CURLOPT_CONNECTTIMEOUT => 8,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $postData,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/x-www-form-urlencoded',
+                    'Accept: application/json',
+                    'User-Agent: AlbertTranslator-PHP/1.2.0',
+                ],
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+        } else {
+            $context = stream_context_create([
+                'http' => [
+                    'method' => 'POST',
+                    'timeout' => TRANSLATION_TIMEOUT_SEC,
+                    'header' => "Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\nUser-Agent: AlbertTranslator-PHP/1.2.0\r\n",
+                    'content' => $postData,
+                ],
+            ]);
+            $response = @file_get_contents($endpoint, false, $context);
+            if (isset($http_response_header) && is_array($http_response_header)) {
+                foreach ($http_response_header as $headerLine) {
+                    if (preg_match('#^HTTP/\S+\s+(\d{3})#', $headerLine, $m)) {
+                        $httpCode = (int)$m[1];
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ($response === false || $httpCode < 200 || $httpCode >= 300) {
+            continue;
+        }
+
+        $data = json_decode((string)$response, true);
+        if (is_array($data) && isset($data['translatedText'])) {
+            $translated = trim((string)$data['translatedText']);
+            if ($translated !== '') {
+                return $translated;
+            }
+        }
+    }
+
+    return '';
+}
+
 function translate_transcript($transcript, $source, $target, &$detectedLanguage, $provider = 'auto')
 {
     $provider = strtolower(trim((string)$provider));
@@ -547,9 +627,26 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         }
     }
 
+    if ($provider === 'libretranslate-free') {
+        $translated = translate_with_libretranslate_free($transcript, $source, $target);
+        if (is_effective_translation($transcript, $translated, $source, $target)) {
+            return $translated;
+        }
+
+        $translated = $tryGoogle($transcript, $source, $target);
+        if ($translated !== '') {
+            return $translated;
+        }
+    }
+
     if ($provider === 'auto') {
         $translated = $tryGoogle($transcript, $source, $target);
         if ($translated !== '') {
+            return $translated;
+        }
+
+        $translated = translate_with_libretranslate_free($transcript, $source, $target);
+        if (is_effective_translation($transcript, $translated, $source, $target)) {
             return $translated;
         }
 
