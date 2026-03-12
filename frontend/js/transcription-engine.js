@@ -83,6 +83,98 @@
     return aliases[normalized] || (normalized + "-" + normalized.toUpperCase());
   }
 
+  function normalizeComparableText(text) {
+    return String(text || "")
+      .toLowerCase()
+      .replace(/[\r\n]+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/^[\s.,;:!?¿¡"'`()\[\]{}-]+|[\s.,;:!?¿¡"'`()\[\]{}-]+$/g, "")
+      .trim();
+  }
+
+  function tokenizeComparableWords(text) {
+    var normalized = normalizeComparableText(text);
+    return normalized ? normalized.split(" ") : [];
+  }
+
+  function findWordOverlapCount(leftText, rightText) {
+    var leftWords = tokenizeComparableWords(leftText);
+    var rightWords = tokenizeComparableWords(rightText);
+    var max = Math.min(leftWords.length, rightWords.length);
+
+    for (var size = max; size > 0; size -= 1) {
+      var overlap = true;
+      for (var i = 0; i < size; i += 1) {
+        if (leftWords[leftWords.length - size + i] !== rightWords[i]) {
+          overlap = false;
+          break;
+        }
+      }
+      if (overlap) {
+        return size;
+      }
+    }
+
+    return 0;
+  }
+
+  function shouldMergeByOverlap(leftText, rightText, overlapCount) {
+    var leftWords = tokenizeComparableWords(leftText);
+    var rightWords = tokenizeComparableWords(rightText);
+    if (!overlapCount || !leftWords.length || !rightWords.length) {
+      return false;
+    }
+
+    var shortestSide = Math.min(leftWords.length, rightWords.length);
+    return overlapCount >= shortestSide || overlapCount >= 4;
+  }
+
+  function mergeWithLastCommittedLine(committedText, nextChunk) {
+    var text = String(committedText || "");
+    var incoming = String(nextChunk || "").trim();
+    if (!incoming) {
+      return text;
+    }
+
+    var lines = text
+      ? text.split(/\r?\n+/).map(function (line) {
+          return String(line || "").trim();
+        }).filter(Boolean)
+      : [];
+
+    if (!lines.length) {
+      return incoming;
+    }
+
+    var lastIndex = lines.length - 1;
+    var lastLine = lines[lastIndex];
+    var normalizedLast = normalizeComparableText(lastLine);
+    var normalizedIncoming = normalizeComparableText(incoming);
+
+    if (!normalizedIncoming) {
+      return lines.join("\n");
+    }
+
+    if (normalizedIncoming === normalizedLast || normalizedLast.indexOf(normalizedIncoming) === 0) {
+      return lines.join("\n");
+    }
+
+    if (normalizedIncoming.indexOf(normalizedLast) === 0) {
+      lines[lastIndex] = incoming;
+      return lines.join("\n");
+    }
+
+    var overlapCount = findWordOverlapCount(lastLine, incoming);
+    if (shouldMergeByOverlap(lastLine, incoming, overlapCount)) {
+      var incomingWords = String(incoming).trim().split(/\s+/);
+      lines[lastIndex] = lastLine + " " + incomingWords.slice(overlapCount).join(" ");
+      return lines.join("\n");
+    }
+
+    lines.push(incoming);
+    return lines.join("\n");
+  }
+
   function appendTranscriptChunk(state, chunk, sourceLanguage) {
     var normalizedChunk = normalizeQuestionPunctuation(String(chunk || "").trim(), sourceLanguage);
     if (!normalizedChunk) {
@@ -96,12 +188,8 @@
     var committedText = String(state && state.committedText ? state.committedText : "");
     var forTranslation = String(state && state.forTranslation ? state.forTranslation : "");
 
-    if (committedText) {
-      committedText += "\n";
-    }
-    committedText += normalizedChunk;
-
-    forTranslation = forTranslation ? (forTranslation + " " + normalizedChunk) : normalizedChunk;
+    committedText = mergeWithLastCommittedLine(committedText, normalizedChunk);
+    forTranslation = committedText.replace(/\r?\n+/g, " ").replace(/\s+/g, " ").trim();
 
     return {
       committedText: committedText,
