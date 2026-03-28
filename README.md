@@ -1,65 +1,59 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.13
+Version `V1.5.2` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
-Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
+## Que hace
 
-## Que hace el programa
-
-- Captura voz en navegador con Web Speech API.
-- Traduce en vivo y en modo manual.
-- Traduce siempre desde el contenido completo del cuadro de transcripcion, evitando previsualizaciones parciales que mezclen idiomas.
-- Soporta lectura en voz alta de transcripcion y traduccion.
-- Incluye fallback local EN<->ES cuando proveedores externos fallan.
-- Permite seleccionar proveedor de traduccion: Auto, Google Free, LibreTranslate Free, MyMemory Free.
-- Mantiene una UX fluida para texto incremental y traduccion instantanea.
-- Incluye watchdog de reconocimiento para recuperar automaticamente la captura cuando hay cortes o silencios prolongados.
-- Permite ajustar desde la UI la sensibilidad del watchdog de voz para reaccionar mas rapido ante pausas o cuelgues del motor.
-- Evita retraducciones redundantes con encolado en vivo deduplicado y control de frecuencia.
-- Muestra estado operativo en tiempo real (microfono, incremental, segmentos y palabras).
-- Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
-- Permite exportar a TXT: ambos paneles, solo transcripcion o solo traduccion.
+- Modo oscuro futurista por defecto.
+- Captura voz con Web Speech API en el navegador.
+- Traduccion fluida y seguimiento automatico al final del texto.
+- Lectura por voz (bocina) para transcripcion y traduccion.
+- Traduccion manual de texto sin microfono.
+- Iconos de speaker estilo traductor moderno.
+- Transcripcion intermedia en vivo con mayor sensibilidad y reconexion automatica de escucha.
+- Corte inmediato de lectura por voz al refrescar/cerrar pagina.
+- Correccion de traduccion para evitar devolver texto original cuando el destino es distinto.
+- Fallback local EN<->ES para mantener traduccion util cuando servicios externos no responden.
+- Traduccion en vivo mas rapida durante la transcripcion (preview + menor latencia de despacho).
+- Mejoras por frases en fallback EN->ES para evitar mezclas ingles/espanol en expresiones comunes.
+- Selector de proveedor free en la nube: `Auto`, `Google Free`, `MyMemory Free`.
+- `Google Free` configurado por defecto.
+- Traduccion en vivo de audio basada siempre en el contenido actual del textfield de transcripcion.
+- Menor perdida de palabras durante streaming al priorizar la mejor alternativa de reconocimiento.
+- Traduccion manual en tiempo real basada en escritura del textfield de origen.
+- Traduccion instantanea en UI (preview optimista + reemplazo rapido) para experiencia tipo Google Translator.
+- Efecto typewriter restaurado para la salida de traduccion.
 
 ## Arquitectura
 
-- index.php: entrada principal de la aplicacion y configuracion de assets.
-- frontend/css/style.css: estilos y experiencia visual.
-- frontend/js/app.js: logica de interfaz, reconocimiento de voz y eventos de usuario.
-- frontend/js/transcription-engine.js: motor de transcripcion separado.
-- frontend/js/translation-engine.js: motor de traduccion separado con procesamiento por frases/oraciones.
-- api/health.php: endpoint de salud.
-- api/translate-text.php: endpoint de traduccion.
-- backend/config.php: configuracion global y version de app.
-- backend/http.php: utilidades HTTP/JSON.
-- backend/translator_service.php: logica de traduccion y fallback.
+- `index.php`: entrypoint web y wiring de assets.
+- `frontend/css/style.css`: UI/UX y tema oscuro.
+- `frontend/js/app.js`: captura voz, UX fluida, lectura por voz.
+- `api/health.php`: estado de la API.
+- `api/translate-text.php`: endpoint de traduccion.
+- `backend/config.php`: constantes globales y version.
+- `backend/http.php`: helpers HTTP/JSON.
+- `backend/translator_service.php`: logica de traduccion.
 
-## Requisitos y dependencias
+## Requisitos
 
-Dependencias de ejecucion:
-- PHP 5.4 o superior.
-- Servidor web (EasyPHP/Apache).
-- Navegador Chromium/Chrome/Edge para reconocimiento de voz y TTS.
+- EasyPHP / Apache con PHP 5.4+.
+- Navegador Chromium/Chrome/Edge para reconocimiento y lectura de voz.
+- Opcional: extension `curl` en PHP para mayor compatibilidad de traduccion.
 
-Dependencias opcionales:
-- Extension curl de PHP para mejorar compatibilidad con servicios externos.
+## Uso
 
-Dependencias de CI/CD:
-- GitHub Actions.
-- softprops/action-gh-release para publicar releases automaticos.
-
-## Ejecucion local
-
-1. Publica este directorio dentro de tu document root de EasyPHP.
-2. Abre http://localhost:888/monitoreos/AlbertTranslator/
-3. Permite acceso al microfono.
-4. Usa Iniciar escucha para transcripcion y traduccion continua.
+1. Abre `http://localhost:888/monitoreos/AlbertTranslator/`.
+2. Permite acceso al microfono.
+3. Por defecto: origen `en` (Ingles), destino `es` (Espanol).
+4. Pulsa `Iniciar escucha` para transcribir y traducir.
 
 ## API
 
-- GET /monitoreos/AlbertTranslator/api/health.php
-- POST /monitoreos/AlbertTranslator/api/translate-text.php
+- `GET /monitoreos/AlbertTranslator/api/health.php`
+- `POST /monitoreos/AlbertTranslator/api/translate-text.php`
 
-Ejemplo de payload:
+Ejemplo JSON para traduccion:
 
 ```json
 {
@@ -69,49 +63,14 @@ Ejemplo de payload:
 }
 ```
 
-## Politica de versionado
-
-Este proyecto usa Semantic Versioning con prefijo V:
-- Formato: Vx.x.x
-- Patch: correcciones o cambios no disruptivos.
-- Minor: nuevas funcionalidades compatibles.
-- Major: cambios incompatibles.
-
-La version debe mantenerse sincronizada en:
-- VERSION
-- backend/config.php (APP_VERSION)
-- Tag de Git
-- GitHub Release
-
-## Releases automaticos
-
-El workflow en .github/workflows/release.yml se ejecuta en cada push a main y:
-- Lee VERSION.
-- Valida formato Vx.x.x.
-- Crea o valida el tag correspondiente en el commit actual.
-- Publica/actualiza el GitHub Release con esa version.
-
-Checklist recomendada antes de publicar:
-- RELEASE_CHECKLIST.md
-
-Regla operativa recomendada:
-- Cada commit a main debe incluir incremento de VERSION si representa una nueva entrega.
-
-## Changelog
-
-Historial de cambios en CHANGELOG.md.
-
 ## Buenas practicas aplicadas
 
-- Separacion de responsabilidades por capas.
-- Validacion de entrada en endpoints.
-- Contratos JSON consistentes.
-- Automatizacion de release para trazabilidad.
-- Version unica y sincronizada en app, git y GitHub.
-- Recuperacion robusta ante errores transitorios de reconocimiento y red.
-- Dedupe y throttling de traduccion en vivo para reducir carga y evitar efectos de rebote.
+- Separacion de responsabilidades (frontend, api, backend).
+- Validacion de entrada en API y limites de longitud.
+- Endpoints con respuestas JSON consistentes.
+- Fallback de traduccion sin romper flujo de usuario.
+- Versionado centralizado en backend (`APP_VERSION`) y archivo `VERSION`.
 
 ## Licencia
 
-Distribuido bajo Apache License 2.0.
-Consulta LICENSE para el texto legal completo.
+Apache License 2.0. Ver `LICENSE`.

@@ -36,7 +36,6 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
         <select id="translation-provider">
           <option value="auto">Auto (recomendado)</option>
           <option value="google-free" selected>Google Free</option>
-          <option value="libretranslate-free">LibreTranslate Free</option>
           <option value="mymemory-free">MyMemory Free</option>
         </select>
       </div>
@@ -46,13 +45,6 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       <button id="start-listening" type="button" class="primary">Iniciar escucha</button>
       <button id="stop-listening" type="button" disabled>Detener</button>
       <button id="clear-output" type="button">Limpiar</button>
-      <button id="export-txt" type="button">Exportar TXT</button>
-      <fieldset class="export-scope" aria-label="Qué exportar en TXT">
-        <legend>Exportar</legend>
-        <label><input type="radio" name="export-scope" value="both" checked> Ambos</label>
-        <label><input type="radio" name="export-scope" value="transcript"> Transcripción</label>
-        <label><input type="radio" name="export-scope" value="translation"> Traducción</label>
-      </fieldset>
       <button id="save-preferences" type="button">Guardar preferencias</button>
       <div class="typing-tuning" aria-label="Ajustes de escritura">
         <label for="typing-profile">Perfil</label>
@@ -77,25 +69,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
         </label>
         <span class="live-mode-label">Vivo rápido</span>
       </div>
-      <div class="watchdog-tuning" aria-label="Sensibilidad del watchdog de voz">
-        <label for="watchdog-silence-threshold">Watchdog voz</label>
-        <select id="watchdog-silence-threshold">
-          <option value="6">Muy sensible 6s</option>
-          <option value="8">Rápido 8s</option>
-          <option value="10" selected>Balanceado 10s</option>
-          <option value="13">Tolerante 13s</option>
-        </select>
-      </div>
       <span id="status" class="status idle">Inactivo</span>
-    </section>
-
-    <section class="runtime-strip" aria-live="polite">
-      <span id="runtime-mic-state" class="runtime-chip">Micrófono: detenido</span>
-      <span id="runtime-incremental-state" class="runtime-chip">Incremental: en espera</span>
-      <span id="runtime-segments-state" class="runtime-chip">Segmentos: 0</span>
-      <span id="runtime-word-state" class="runtime-chip">Palabras: 0</span>
-      <span id="runtime-watchdog-state" class="runtime-chip">Watchdog: 10s · pase 5s</span>
-      <span class="runtime-shortcuts">Atajos: Ctrl+Enter iniciar/detener · Ctrl+Backspace limpiar</span>
     </section>
 
     <section class="panes">
@@ -143,8 +117,6 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
       appVersion: <?php echo json_encode(APP_VERSION); ?>,
     };
   </script>
-  <script src="./frontend/js/transcription-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
-  <script src="./frontend/js/translation-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/app.js?v=<?php echo (int)$jsVersion; ?>"></script>
 </body>
 </html>
