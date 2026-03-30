@@ -1,5 +1,16 @@
 <?php
 
+function is_windows_platform()
+{
+    return stripos(PHP_OS, 'WIN') === 0;
+}
+
+function escape_windows_cmd_arg($value)
+{
+    // Encierra argumentos para cmd.exe sin introducir escapes extra que deformen URLs ya codificadas.
+    return '"' . str_replace('"', '""', (string)$value) . '"';
+}
+
 function send_json($payload, $statusCode)
 {
     if (!headers_sent()) {
@@ -53,14 +64,22 @@ function http_get_remote($url, &$httpCode, &$networkError)
         return $response;
     }
 
-    $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError);
-    if ($curlCliResponse !== false) {
-        return $curlCliResponse;
-    }
+    if (is_windows_platform()) {
+        // En EasyPHP para Windows este fallback es el mas estable cuando falta ext/curl.
+        $psResponse = http_get_remote_via_powershell($url, $httpCode, $networkError);
+        if ($psResponse !== false) {
+            return $psResponse;
+        }
 
-    $psResponse = http_get_remote_via_powershell($url, $httpCode, $networkError);
-    if ($psResponse !== false) {
-        return $psResponse;
+        $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError);
+        if ($curlCliResponse !== false) {
+            return $curlCliResponse;
+        }
+    } else {
+        $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError);
+        if ($curlCliResponse !== false) {
+            return $curlCliResponse;
+        }
     }
 
     $context = stream_context_create([
@@ -92,7 +111,7 @@ function http_get_remote($url, &$httpCode, &$networkError)
 function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
 {
     $httpCode = 0;
-    if (stripos(PHP_OS, 'WIN') !== 0) {
+    if (!is_windows_platform()) {
         return false;
     }
 
@@ -101,9 +120,10 @@ function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
         return false;
     }
 
-    $cmd = 'curl.exe -s -L -o ' . escapeshellarg($tmpOut)
+    // Usa comillas compatibles con cmd.exe para soportar rutas con espacios y URLs con &.
+    $cmd = 'curl.exe -s -L -o ' . escape_windows_cmd_arg($tmpOut)
         . ' -w "%{http_code}" '
-        . escapeshellarg($url);
+        . escape_windows_cmd_arg($url);
 
     $output = [];
     $exitCode = 1;
@@ -126,22 +146,59 @@ function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
 function http_get_remote_via_powershell($url, &$httpCode, &$networkError)
 {
     $httpCode = 0;
-    if (stripos(PHP_OS, 'WIN') !== 0) {
+    if (!is_windows_platform()) {
         return false;
     }
 
     $timeout = (int)TRANSLATION_TIMEOUT_SEC;
-    $psScript = "try { "
-        . "$r = Invoke-WebRequest -UseBasicParsing -Uri " . escapeshellarg($url)
-        . " -TimeoutSec " . $timeout . "; "
-        . "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-        . "Write-Output $r.Content; exit 0 "
-        . "} catch { exit 1 }";
+    $tmpScriptBase = tempnam(sys_get_temp_dir(), 'atr_ps_');
+    if (!$tmpScriptBase) {
+        $networkError = 'No se pudo preparar el fallback de PowerShell.';
+        return false;
+    }
+    $tmpScript = $tmpScriptBase . '.ps1';
+    @unlink($tmpScriptBase);
 
-    $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command ' . escapeshellarg($psScript);
+    $psScript = <<<'PS1'
+param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [int]$TimeoutSec = 15
+)
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+try {
+    $response = Invoke-WebRequest `
+        -UseBasicParsing `
+        -Uri $Url `
+        -TimeoutSec $TimeoutSec `
+        -Headers @{ Accept = 'application/json'; 'User-Agent' = 'AlbertTranslator-PHP/1.5.x' }
+    if ($response -and $response.Content) {
+        Write-Output $response.Content
+        exit 0
+    }
+
+    exit 2
+} catch {
+    exit 1
+}
+PS1;
+
+    if (@file_put_contents($tmpScript, $psScript) === false) {
+        @unlink($tmpScript);
+        $networkError = 'No se pudo escribir el script temporal de PowerShell.';
+        return false;
+    }
+
+    // Ejecuta un script temporal para evitar problemas de quoting con PowerShell y PHP 5.4.
+    $cmd = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '
+        . escape_windows_cmd_arg($tmpScript)
+        . ' -Url ' . escape_windows_cmd_arg($url)
+        . ' -TimeoutSec ' . (int)$timeout;
     $out = [];
     $code = 1;
     @exec($cmd, $out, $code);
+    @unlink($tmpScript);
 
     if ($code !== 0) {
         $networkError = 'Fallo tambien el fallback de PowerShell al traducir.';

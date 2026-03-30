@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.15` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.16` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -19,7 +19,8 @@ Version `V1.5.15` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Selector de proveedor free en la nube: `Auto`, `Google Free`, `MyMemory Free`.
 - `Google Free` configurado por defecto.
 - Traduccion en vivo alineada con el contenido actual visible del cuadro de transcripcion.
-- Preview vivo de traduccion mientras llega la respuesta final del proveedor.
+- Preview local solo cuando la calidad minima es segura; la traduccion en vivo prioriza exactitud sobre pseudo-traducciones.
+- Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
 - Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
 - Menor perdida de palabras y frases cortas durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
@@ -37,6 +38,7 @@ Version `V1.5.15` para EasyPHP, sin dependencias de Python y con arquitectura se
 - `backend/config.php`: constantes globales y version.
 - `backend/http.php`: helpers HTTP/JSON.
 - `backend/translator_service.php`: logica de traduccion.
+- `tests/translation_smoke.php`: prueba de humo de traduccion.
 
 ## Requisitos
 
@@ -65,6 +67,10 @@ Ejemplo JSON para traduccion:
   "target_language": "es"
 }
 ```
+
+## Validacion basica
+
+- Ejecuta `C:\Program Files (x86)\EasyPHP-Webserver-14.1b2\binaries\php\php.exe tests\translation_smoke.php` para una prueba rapida de traduccion.
 
 ## Buenas practicas aplicadas
 

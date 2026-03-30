@@ -452,9 +452,11 @@ function scheduleLivePreviewTranslation(liveTranscript) {
   return;
 }
 
-function localWordByWordTranslate(text, dictionary) {
+function buildLocalWordByWordPreview(text, dictionary) {
   var parts = String(text || "").split(/(\s+|[.,!?;:])/g);
   var out = "";
+  var wordCount = 0;
+  var translatedWords = 0;
   for (var i = 0; i < parts.length; i += 1) {
     var token = String(parts[i] || "");
     if (!token) {
@@ -464,6 +466,9 @@ function localWordByWordTranslate(text, dictionary) {
       out += token;
       continue;
     }
+    if (/^[a-záéíóúñü]+$/i.test(token)) {
+      wordCount += 1;
+    }
     var lower = token.toLowerCase();
     var translated = dictionary[lower];
     if (!translated) {
@@ -472,8 +477,41 @@ function localWordByWordTranslate(text, dictionary) {
     }
     var keepCaps = token.length > 0 && token.charAt(0) === token.charAt(0).toUpperCase();
     out += keepCaps ? (translated.charAt(0).toUpperCase() + translated.slice(1)) : translated;
+    if (/^[a-záéíóúñü]+$/i.test(token)) {
+      translatedWords += 1;
+    }
   }
-  return String(out || "").trim();
+  return {
+    text: String(out || "").trim(),
+    wordCount: wordCount,
+    translatedWords: translatedWords,
+  };
+}
+
+function shouldUseOptimisticPreview(originalText, previewInfo, source, target) {
+  if (!previewInfo || !previewInfo.text) {
+    return false;
+  }
+  if (!shouldAcceptPreviewTranslation(originalText, previewInfo.text, source, target)) {
+    return false;
+  }
+
+  var ratio = previewInfo.wordCount > 0
+    ? (previewInfo.translatedWords / previewInfo.wordCount)
+    : 0;
+  var minRatio = previewInfo.wordCount >= 4 ? 0.78 : 1;
+  if (ratio < minRatio) {
+    return false;
+  }
+
+  // Evita previews locales demasiado literales para frases largas o mixtas.
+  if (String(target || "").toLowerCase() === "es" && previewInfo.wordCount >= 4) {
+    if (estimateEsCoverage(previewInfo.text) < 0.42) {
+      return false;
+    }
+  }
+
+  return normalizeFlatText(previewInfo.text) !== normalizeFlatText(originalText);
 }
 
 function buildOptimisticPreview(text) {
@@ -485,15 +523,15 @@ function buildOptimisticPreview(text) {
   }
 
   if ((src === "en" || src === "auto") && tgt === "es") {
-    var es = localWordByWordTranslate(t, LOCAL_GLOSSARY_EN_ES);
-    return es || t;
+    var esPreview = buildLocalWordByWordPreview(t, LOCAL_GLOSSARY_EN_ES);
+    return shouldUseOptimisticPreview(t, esPreview, src, tgt) ? esPreview.text : "";
   }
   if ((src === "es" || src === "auto") && tgt === "en") {
-    var en = localWordByWordTranslate(t, LOCAL_GLOSSARY_ES_EN);
-    return en || t;
+    var enPreview = buildLocalWordByWordPreview(t, LOCAL_GLOSSARY_ES_EN);
+    return shouldUseOptimisticPreview(t, enPreview, src, tgt) ? enPreview.text : "";
   }
 
-  return t;
+  return "";
 }
 
 function applyTypingProfile(profileName) {
@@ -1024,11 +1062,7 @@ function maybeEnqueueLiveTranslation(text, force) {
     return;
   }
 
-  // Mantiene feedback visible mientras llega la traducción online final.
-  var optimistic = buildOptimisticPreview(value);
-  if (optimistic && normalizeFlatText(optimistic) !== normalized) {
-    renderTranslationPreview(optimistic);
-  }
+  // En vivo prioriza exactitud: solo se actualiza con la traduccion validada del backend/fallback real.
 
   lastLiveEnqueueTextNorm = normalized;
   lastLiveEnqueueAt = now;
