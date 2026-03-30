@@ -663,11 +663,6 @@ function getRecognitionWatchdogAction(idleMs, staleMs, hasPendingInterim) {
     return "hard-recovery";
   }
 
-  // El silencio normal no debe forzar reconexion; solo confirma el interim si existe.
-  if (hasPendingInterim && idleMs >= WATCHDOG_SILENCE_THRESHOLD_MS) {
-    return "commit-interim";
-  }
-
   return "none";
 }
 
@@ -1018,7 +1013,12 @@ function scheduleInterimCommitBySilence() {
     if (!listeningRequested) {
       return;
     }
-    commitPendingInterim("silence");
+
+    // En pausa breve estabiliza la traduccion, pero no parte la sesion de voz.
+    var transcriptNow = getTranscriptFieldText();
+    if (transcriptNow) {
+      maybeEnqueueLiveTranslation(transcriptNow, true);
+    }
   }, delay);
 }
 
@@ -1912,6 +1912,7 @@ function startListening() {
       if (!listeningRequested) {
         return;
       }
+      commitRecognitionSession(true, "error-aborted");
       scheduleRecognitionRestart("error-aborted", 200);
       return;
     }
@@ -1939,6 +1940,7 @@ function startListening() {
     }
 
     recognitionConsecutiveErrors += 1;
+    commitRecognitionSession(true, "error-" + code);
     showError("Error de reconocimiento: " + code + ". Reintentando...");
     scheduleRecognitionRestart("error-" + code, recognitionConsecutiveErrors >= 3 ? 520 : 260);
   };
@@ -2059,15 +2061,6 @@ function startRecognitionWatchdog() {
     // Si el motor deja de emitir eventos por demasiado tiempo, rehace la instancia completa.
     if (action === "hard-recovery") {
       forceRecognitionRecovery("watchdog-stale");
-      return;
-    }
-
-    if (action !== "commit-interim") {
-      return;
-    }
-
-    if (commitPendingInterim("watchdog")) {
-      recognitionLastResultAt = Date.now();
     }
   }, WATCHDOG_POLL_INTERVAL_MS);
 }
@@ -2086,6 +2079,7 @@ function forceRecognitionRecovery(reason) {
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
+  commitRecognitionSession(true, reason);
 
   try {
     if (recognition) {
