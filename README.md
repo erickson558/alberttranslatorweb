@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.18` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.19` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -23,6 +23,8 @@ Version `V1.5.18` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
 - Fusion inteligente de bloques `interim/final` para reducir repeticion de palabras y frases en la transcripcion.
 - Deduplicacion de cola reciente de transcripcion para bloques finales que reagrupan varias frases ya confirmadas.
+- Typewriter restaurado en transcripcion sin usar el textarea animado como fuente de verdad para traduccion/copia/exportacion.
+- Reconstruccion de la sesion de voz desde `SpeechRecognitionResultList` completa para reducir perdida de transcripcion en vivo.
 - Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
 - Menor perdida de palabras y frases cortas durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.

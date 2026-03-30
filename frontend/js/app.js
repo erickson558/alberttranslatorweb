@@ -70,7 +70,11 @@ let typedTranslateDebounceTimer = null;
 let livePreviewDelayTimer = null;
 let interimCommitTimer = null;
 let transcriptCommittedText = "";
+let transcriptDisplayText = "";
 let transcriptForTranslation = "";
+let transcriptHistoryText = "";
+let recognitionSessionFinalText = "";
+let recognitionSessionInterimText = "";
 let translationCommittedText = "";
 let liveTranslationPreviewText = "";
 let lastInterimTranslateAt = 0;
@@ -204,14 +208,14 @@ function wireEvents() {
   }
 
   copyTranscriptBtn.addEventListener("click", function () {
-    copyText(transcriptOutput.value);
+    copyText(getTranscriptFieldText());
   });
   copyTranslationBtn.addEventListener("click", function () {
     copyText(translationOutput.value);
   });
   if (exportTranscriptBtn) {
     exportTranscriptBtn.addEventListener("click", function () {
-      exportText(transcriptOutput.value, "transcripcion");
+      exportText(getTranscriptFieldText(), "transcripcion");
     });
   }
   if (exportTranslationBtn) {
@@ -221,7 +225,7 @@ function wireEvents() {
   }
 
   speakTranscriptBtn.addEventListener("click", function () {
-    speakText(transcriptOutput.value, resolveSpeechLang(sourceSelect.value));
+    speakText(getTranscriptFieldText(), resolveSpeechLang(sourceSelect.value));
   });
   speakTranslationBtn.addEventListener("click", function () {
     speakText(translationOutput.value, resolveSpeechLang(targetSelect.value));
@@ -600,11 +604,54 @@ function splitTranscriptCommittedLines(text) {
     .filter(Boolean);
 }
 
+function joinTranscriptBlocks(parts) {
+  return (Array.isArray(parts) ? parts : [])
+    .map(function (part) {
+      return String(part || "").trim();
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function rebuildTranscriptForTranslation() {
   transcriptForTranslation = splitTranscriptCommittedLines(transcriptCommittedText)
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function syncTranscriptModelState() {
+  // Mantiene separado el historial confirmado del texto provisional de la sesion actual.
+  transcriptCommittedText = joinTranscriptBlocks([transcriptHistoryText, recognitionSessionFinalText]);
+  rebuildTranscriptForTranslation();
+
+  if (recognitionSessionInterimText) {
+    transcriptDisplayText = mergeTranscriptChunkIntoText(transcriptCommittedText, recognitionSessionInterimText).text;
+  } else {
+    transcriptDisplayText = transcriptCommittedText;
+  }
+
+  return transcriptDisplayText;
+}
+
+function renderTranscriptFromModel() {
+  var displayText = syncTranscriptModelState();
+  if (
+    recognitionSessionInterimText
+    && normalizeFlatText(displayText) !== normalizeFlatText(transcriptCommittedText)
+  ) {
+    transcriptOutput.classList.add("streaming");
+  } else {
+    transcriptOutput.classList.remove("streaming");
+  }
+
+  animateTypeInto(transcriptOutput, displayText, "transcript");
+}
+
+function resetRecognitionSessionState() {
+  recognitionSessionFinalText = "";
+  recognitionSessionInterimText = "";
+  lastInterimChunk = "";
 }
 
 function replaceTranscriptTail(lines, lineCount, text) {
@@ -861,34 +908,24 @@ function mergeTranscriptChunkIntoText(baseText, chunk) {
 }
 
 function appendTranscriptChunk(chunk) {
+  // Promueve el texto al historial estable para que no dependa del render visual.
   var merged = mergeTranscriptChunkIntoText(transcriptCommittedText, chunk);
   if (!merged.changed) {
     return false;
   }
 
-  transcriptCommittedText = merged.text;
-  rebuildTranscriptForTranslation();
+  transcriptHistoryText = merged.text;
+  resetRecognitionSessionState();
+  syncTranscriptModelState();
   transcriptOutput.classList.remove("streaming");
-  animateTypeInto(transcriptOutput, transcriptCommittedText, "transcript");
+  animateTypeInto(transcriptOutput, transcriptDisplayText, "transcript");
   return true;
 }
 
 function renderTranscriptLive(interimText) {
-  var normalizedInterim = normalizeQuestionPunctuation(String(interimText || "").trim(), sourceSelect.value);
-  var text = transcriptCommittedText;
-  if (normalizedInterim) {
-    var mergedPreview = mergeTranscriptChunkIntoText(transcriptCommittedText, normalizedInterim);
-    text = mergedPreview.text;
-    if (mergedPreview.hasLiveChange && normalizeFlatText(text) !== normalizeFlatText(transcriptCommittedText)) {
-      transcriptOutput.classList.add("streaming");
-    } else {
-      transcriptOutput.classList.remove("streaming");
-    }
-  } else {
-    transcriptOutput.classList.remove("streaming");
-  }
-
-  animateTypeInto(transcriptOutput, text, "transcript");
+  recognitionSessionInterimText = normalizeQuestionPunctuation(String(interimText || "").trim(), sourceSelect.value);
+  lastInterimChunk = recognitionSessionInterimText;
+  renderTranscriptFromModel();
 }
 
 function composeTranscriptForTranslation(interimText) {
@@ -901,7 +938,8 @@ function composeTranscriptForTranslation(interimText) {
 }
 
 function getTranscriptFieldText() {
-  return stripVisualCursor(transcriptOutput ? transcriptOutput.value : "");
+  // La traduccion, copia y exportacion deben leer el modelo canonico, no el textarea animado.
+  return String(transcriptDisplayText || transcriptCommittedText || "").trim();
 }
 
 function clearInterimCommitTimer() {
@@ -944,22 +982,12 @@ function canCommitInterimChunk(chunk) {
 }
 
 function commitPendingInterim(reason) {
-  var pending = String(lastInterimChunk || "").trim();
+  var pending = String(recognitionSessionInterimText || lastInterimChunk || "").trim();
   if (!canCommitInterimChunk(pending)) {
     return false;
   }
 
-  var appended = appendTranscriptChunk(pending);
-  lastInterimChunk = "";
-  if (!appended) {
-    return false;
-  }
-
-  var transcriptNow = getTranscriptFieldText();
-  if (transcriptNow) {
-    maybeEnqueueLiveTranslation(transcriptNow, reason !== "silence");
-  }
-  return true;
+  return commitRecognitionSession(true, reason);
 }
 
 function scheduleInterimCommitBySilence() {
@@ -1073,12 +1101,12 @@ function stopTypewriter(mode) {
 }
 
 function shouldInstantRenderTypewriter(mode, target) {
-  // La transcripción debe reflejarse al instante porque es la fuente de traducción.
-  if (mode === "transcript") {
+  var text = String(target || "");
+  // Mantiene el efecto typewriter en transcripcion salvo cuando el buffer ya es muy grande.
+  if (mode === "transcript" && text.length > 3200) {
     return true;
   }
-  var text = String(target || "");
-  if (text.length > 2200) {
+  if (mode !== "transcript" && text.length > 2200) {
     return true;
   }
   return false;
@@ -1552,6 +1580,72 @@ function pickBestSpeechAlternative(result) {
   return bestText;
 }
 
+function buildRecognitionSnapshot(results) {
+  var finalParts = [];
+  var interimParts = [];
+  if (!results || typeof results.length !== "number") {
+    return {
+      finalText: "",
+      interimText: "",
+    };
+  }
+
+  for (var i = 0; i < results.length; i += 1) {
+    var result = results[i];
+    var text = pickBestSpeechAlternative(result);
+    if (!text) {
+      text = String((result && result[0] && result[0].transcript) || "").trim();
+    }
+    text = normalizeQuestionPunctuation(String(text || "").trim(), sourceSelect.value);
+    if (!text) {
+      continue;
+    }
+
+    if (result.isFinal) {
+      finalParts.push(text);
+    } else {
+      interimParts.push(text);
+    }
+  }
+
+  return {
+    finalText: joinTranscriptBlocks(finalParts),
+    interimText: joinTranscriptBlocks(interimParts),
+  };
+}
+
+function commitRecognitionSession(includeInterim, reason) {
+  var mergedHistory = transcriptHistoryText;
+
+  if (recognitionSessionFinalText) {
+    mergedHistory = mergeTranscriptChunkIntoText(mergedHistory, recognitionSessionFinalText).text;
+  }
+
+  var pendingInterim = String(recognitionSessionInterimText || lastInterimChunk || "").trim();
+  if (includeInterim && canCommitInterimChunk(pendingInterim)) {
+    mergedHistory = mergeTranscriptChunkIntoText(mergedHistory, pendingInterim).text;
+  }
+
+  var changed = normalizeFlatText(mergedHistory) !== normalizeFlatText(transcriptHistoryText)
+    || recognitionSessionFinalText
+    || recognitionSessionInterimText;
+
+  transcriptHistoryText = mergedHistory;
+  resetRecognitionSessionState();
+  syncTranscriptModelState();
+  transcriptOutput.classList.remove("streaming");
+  animateTypeInto(transcriptOutput, transcriptDisplayText, "transcript");
+
+  if (changed) {
+    var transcriptNow = getTranscriptFieldText();
+    if (transcriptNow) {
+      maybeEnqueueLiveTranslation(transcriptNow, reason !== "silence");
+    }
+  }
+
+  return changed;
+}
+
 async function processTranscript(text, fromManual, mode) {
   var translationMode = String(mode || "replace").toLowerCase();
 
@@ -1639,13 +1733,14 @@ async function processTranscript(text, fromManual, mode) {
     if (fromManual) {
       var transcriptState = typewriterStates.transcript;
       stopTypewriter("transcript");
-      transcriptCommittedText = text;
-      transcriptState.raw = text;
-      transcriptOutput.value = text;
+      transcriptHistoryText = String(text || "").trim();
+      resetRecognitionSessionState();
+      syncTranscriptModelState();
+      transcriptState.raw = transcriptDisplayText;
+      transcriptOutput.value = transcriptDisplayText;
       transcriptOutput.classList.remove("streaming");
       autoScrollToEnd(transcriptOutput);
-      transcriptForTranslation = text;
-      lastInterimChunk = "";
+      rebuildTranscriptForTranslation();
       translationCommittedText = "";
       liveTranslationPreviewText = "";
     }
@@ -1841,12 +1936,7 @@ function startListening() {
     liveTranslationPreviewText = "";
     animateTypeInto(translationOutput, translationCommittedText, "translation");
 
-    commitPendingInterim("onend");
-
-    var transcriptNow = getTranscriptFieldText();
-    if (transcriptNow) {
-      maybeEnqueueLiveTranslation(transcriptNow, true);
-    }
+    commitRecognitionSession(true, "onend");
 
     listening = false;
     stopRecognitionWatchdog();
@@ -1863,45 +1953,15 @@ function startListening() {
 
   recognition.onresult = function (event) {
     recognitionLastEventAt = Date.now();
-    var finalChunk = "";
-    var interimChunk = "";
-    for (var i = event.resultIndex; i < event.results.length; i += 1) {
-      var result = event.results[i];
-      var text = pickBestSpeechAlternative(result);
-      if (!text) {
-        text = String((result[0] && result[0].transcript) || "").trim();
-      }
-      if (!text) {
-        continue;
-      }
-      if (result.isFinal) {
-        finalChunk += " " + text;
-      }
-    }
+    // Reconstruye el estado completo de la sesion actual para no depender de concatenaciones incrementales.
+    var snapshot = buildRecognitionSnapshot(event.results);
+    recognitionSessionFinalText = snapshot.finalText;
+    recognitionSessionInterimText = snapshot.interimText;
+    lastInterimChunk = recognitionSessionInterimText;
 
-    // Reconstruye interim completo para evitar saltos/perdida visual de palabras.
-    for (var j = 0; j < event.results.length; j += 1) {
-      var fullResult = event.results[j];
-      if (fullResult.isFinal) {
-        continue;
-      }
-      var interimText = pickBestSpeechAlternative(fullResult);
-      if (!interimText) {
-        interimText = String((fullResult[0] && fullResult[0].transcript) || "").trim();
-      }
-      if (!interimText) {
-        continue;
-      }
-      interimChunk += " " + interimText;
-    }
+    renderTranscriptFromModel();
 
-    finalChunk = finalChunk.trim();
-    interimChunk = interimChunk.trim();
-    lastInterimChunk = interimChunk;
-
-    if (finalChunk) {
-      appendTranscriptChunk(finalChunk);
-      lastInterimChunk = "";
+    if (recognitionSessionFinalText) {
       recognitionLastResultAt = Date.now();
       if (livePreviewDelayTimer) {
         clearTimeout(livePreviewDelayTimer);
@@ -1909,9 +1969,7 @@ function startListening() {
       }
     }
 
-    renderTranscriptLive(interimChunk);
-
-    if (interimChunk) {
+    if (recognitionSessionInterimText) {
       scheduleInterimCommitBySilence();
     } else {
       clearInterimCommitTimer();
@@ -1922,7 +1980,7 @@ function startListening() {
       return;
     }
 
-    // Traduce siempre el contenido actual del cuadro de transcripción.
+    // Traduce siempre el contenido actual del modelo de transcripción, no del textarea animado.
     maybeEnqueueLiveTranslation(transcriptNow, false);
     lastInterimTranslateAt = Date.now();
     recognitionLastResultAt = Date.now();
@@ -2114,12 +2172,7 @@ function stopListening() {
   lastRenderedLiveSource = "";
   liveTranslationPreviewText = "";
   animateTypeInto(translationOutput, translationCommittedText, "translation");
-  commitPendingInterim("stop");
-
-  var transcriptNow = getTranscriptFieldText();
-  if (transcriptNow) {
-    maybeEnqueueLiveTranslation(transcriptNow, true);
-  }
+  commitRecognitionSession(true, "stop");
 
   if (recognition) {
     try {
@@ -2164,7 +2217,11 @@ function clearOutputs() {
   stopTypewriter("transcript");
   stopTypewriter("translation");
   transcriptCommittedText = "";
+  transcriptDisplayText = "";
   transcriptForTranslation = "";
+  transcriptHistoryText = "";
+  recognitionSessionFinalText = "";
+  recognitionSessionInterimText = "";
   typewriterStates.transcript.raw = "";
   typewriterStates.translation.raw = "";
   transcriptOutput.value = "";
