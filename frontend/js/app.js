@@ -36,6 +36,8 @@ const statusBox = document.getElementById("status");
 const errorBox = document.getElementById("error-box");
 const copyTranscriptBtn = document.getElementById("copy-transcript");
 const copyTranslationBtn = document.getElementById("copy-translation");
+const exportTranscriptBtn = document.getElementById("export-transcript");
+const exportTranslationBtn = document.getElementById("export-translation");
 const speakTranscriptBtn = document.getElementById("speak-transcript");
 const speakTranslationBtn = document.getElementById("speak-translation");
 const manualInput = document.getElementById("manual-input");
@@ -66,6 +68,7 @@ let listeningRequested = false;
 let translateDebounceTimer = null;
 let typedTranslateDebounceTimer = null;
 let livePreviewDelayTimer = null;
+let interimCommitTimer = null;
 let transcriptCommittedText = "";
 let transcriptForTranslation = "";
 let translationCommittedText = "";
@@ -80,10 +83,23 @@ let queuedTranslationText = "";
 let queuedTranslationFromManual = false;
 let queuedTranslationMode = "replace";
 let lastInterimChunk = "";
+let recognitionRestartTimer = null;
+let recognitionWatchdogTimer = null;
+let recognitionRestartAttempts = 0;
+let recognitionLastResultAt = 0;
+let recognitionLastEventAt = 0;
+let recognitionConsecutiveErrors = 0;
+let recognitionLastRestartAt = 0;
+let recognitionLastHardRecoveryAt = 0;
+let lastLiveEnqueueTextNorm = "";
+let lastLiveEnqueueAt = 0;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
 };
+const WATCHDOG_SILENCE_THRESHOLD_MS = 10000;
+const WATCHDOG_STALE_THRESHOLD_MS = 15000;
+const WATCHDOG_POLL_INTERVAL_MS = 3000;
 
 const LOCAL_GLOSSARY_EN_ES = {
   hello: "hola", hi: "hola", how: "cómo", are: "estás", you: "tú", today: "hoy", tomorrow: "mañana", yesterday: "ayer",
@@ -124,6 +140,16 @@ function initSpeechUnloadGuards() {
   window.addEventListener("beforeunload", forceStopSpeech, false);
   window.addEventListener("pagehide", forceStopSpeech, false);
   window.addEventListener("beforeunload", persistUiPreferences, false);
+  // Si la pestaña regresa a primer plano, intenta retomar la escucha caída.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    if (!listeningRequested || listening) {
+      return;
+    }
+    scheduleRecognitionRestart("visibility-resume", 180, true);
+  });
 }
 
 function forceStopSpeech() {
@@ -183,6 +209,16 @@ function wireEvents() {
   copyTranslationBtn.addEventListener("click", function () {
     copyText(translationOutput.value);
   });
+  if (exportTranscriptBtn) {
+    exportTranscriptBtn.addEventListener("click", function () {
+      exportText(transcriptOutput.value, "transcripcion");
+    });
+  }
+  if (exportTranslationBtn) {
+    exportTranslationBtn.addEventListener("click", function () {
+      exportText(translationOutput.value, "traduccion");
+    });
+  }
 
   speakTranscriptBtn.addEventListener("click", function () {
     speakText(transcriptOutput.value, resolveSpeechLang(sourceSelect.value));
@@ -193,12 +229,24 @@ function wireEvents() {
 
   sourceSelect.addEventListener("change", function () {
     persistUiPreferences();
+    resetLiveEnqueueState();
     if (recognition && listening) {
       recognition.lang = resolveRecognitionLang(sourceSelect.value);
     }
+    var transcriptText = getTranscriptFieldText();
+    if (transcriptText) {
+      enqueueTranslation(transcriptText, false, 0, "replace");
+    }
   });
 
-  targetSelect.addEventListener("change", persistUiPreferences);
+  targetSelect.addEventListener("change", function () {
+    persistUiPreferences();
+    resetLiveEnqueueState();
+    var transcriptText = getTranscriptFieldText();
+    if (transcriptText) {
+      enqueueTranslation(transcriptText, false, 0, "replace");
+    }
+  });
 
   translateManualBtn.addEventListener("click", function () {
     var text = String(manualInput.value || "").trim();
@@ -216,9 +264,15 @@ function wireEvents() {
   if (translationProviderSelect) {
     translationProviderSelect.addEventListener("change", function () {
       persistUiPreferences();
+      resetLiveEnqueueState();
       var txt = String(manualInput.value || "").trim();
       if (txt.length > 1) {
         scheduleTypedTranslation(txt);
+        return;
+      }
+      var transcriptText = getTranscriptFieldText();
+      if (transcriptText) {
+        enqueueTranslation(transcriptText, false, 0, "replace");
       }
     });
   }
@@ -394,26 +448,8 @@ function getLiveStabilityDelayMs() {
 }
 
 function scheduleLivePreviewTranslation(liveTranscript) {
-  var text = String(liveTranscript || "").trim();
-  if (!text) {
-    return;
-  }
-
-  if (livePreviewDelayTimer) {
-    clearTimeout(livePreviewDelayTimer);
-    livePreviewDelayTimer = null;
-  }
-
-  var delayMs = getLiveStabilityDelayMs();
-  livePreviewDelayTimer = setTimeout(function () {
-    var normalizedLive = normalizeFlatText(text);
-    if (!normalizedLive || normalizedLive === lastRenderedLiveSource) {
-      return;
-    }
-    lastRenderedLiveSource = normalizedLive;
-    lastInterimTranslateAt = Date.now();
-    enqueueTranslation(text, false, getLivePreviewDebounceMs(), "preview");
-  }, delayMs);
+  // Se desactiva el preview parcial para no degradar la traducción final.
+  return;
 }
 
 function localWordByWordTranslate(text, dictionary) {
@@ -530,6 +566,7 @@ function appendTranscriptChunk(chunk) {
   transcriptForTranslation = transcriptForTranslation
     ? (transcriptForTranslation + " " + normalizedChunk)
     : normalizedChunk;
+  transcriptOutput.classList.remove("streaming");
   animateTypeInto(transcriptOutput, transcriptCommittedText, "transcript");
 }
 
@@ -557,6 +594,82 @@ function composeTranscriptForTranslation(interimText) {
 
 function getTranscriptFieldText() {
   return stripVisualCursor(transcriptOutput ? transcriptOutput.value : "");
+}
+
+function clearInterimCommitTimer() {
+  if (interimCommitTimer) {
+    clearTimeout(interimCommitTimer);
+    interimCommitTimer = null;
+  }
+}
+
+function getLastCommittedTranscriptNormalized() {
+  var lines = String(transcriptCommittedText || "")
+    .split(/\r?\n+/)
+    .map(function (line) {
+      return String(line || "").trim();
+    })
+    .filter(Boolean);
+  if (!lines.length) {
+    return "";
+  }
+  return normalizeFlatText(lines[lines.length - 1]);
+}
+
+function canCommitInterimChunk(chunk) {
+  var text = String(chunk || "").trim();
+  if (!text) {
+    return false;
+  }
+
+  var normalized = normalizeFlatText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  // Evita duplicar la última frase ya confirmada.
+  if (normalized === getLastCommittedTranscriptNormalized()) {
+    return false;
+  }
+
+  // Filtra ruido corto típico de resultados intermedios inestables.
+  var words = countWords(text);
+  if (words < 2 && text.length < 9) {
+    return false;
+  }
+
+  return true;
+}
+
+function commitPendingInterim(reason) {
+  var pending = String(lastInterimChunk || "").trim();
+  if (!canCommitInterimChunk(pending)) {
+    return false;
+  }
+
+  appendTranscriptChunk(pending);
+  lastInterimChunk = "";
+
+  var transcriptNow = getTranscriptFieldText();
+  if (transcriptNow) {
+    maybeEnqueueLiveTranslation(transcriptNow, reason !== "silence");
+  }
+  return true;
+}
+
+function scheduleInterimCommitBySilence() {
+  clearInterimCommitTimer();
+  if (!listeningRequested) {
+    return;
+  }
+
+  var delay = getLiveTranslationMode() === "fast" ? 780 : 1180;
+  interimCommitTimer = setTimeout(function () {
+    if (!listeningRequested) {
+      return;
+    }
+    commitPendingInterim("silence");
+  }, delay);
 }
 
 function computeTypeDelayMs(ch, mode) {
@@ -654,6 +767,18 @@ function stopTypewriter(mode) {
   state.running = false;
 }
 
+function shouldInstantRenderTypewriter(mode, target) {
+  // La transcripción debe reflejarse al instante porque es la fuente de traducción.
+  if (mode === "transcript") {
+    return true;
+  }
+  var text = String(target || "");
+  if (text.length > 2200) {
+    return true;
+  }
+  return false;
+}
+
 function animateTypeInto(textarea, finalText, mode) {
   var state = typewriterStates[mode || "translation"];
   if (!state) {
@@ -663,6 +788,15 @@ function animateTypeInto(textarea, finalText, mode) {
   }
 
   state.target = String(finalText || "");
+
+  if (shouldInstantRenderTypewriter(mode, finalText)) {
+    stopTypewriter(mode || "translation");
+    state.raw = String(finalText || "");
+    textarea.value = state.raw;
+    textarea.classList.remove("typing");
+    autoScrollToEnd(textarea);
+    return;
+  }
 
   if (state.running) {
     return;
@@ -709,7 +843,8 @@ function enqueueTranslation(text, fromManual, priorityMs, mode) {
   var waitMs = typeof priorityMs === "number" ? priorityMs : (fromManual ? 0 : 10);
   var queueMode = String(mode || "replace").toLowerCase();
 
-  if (!fromManual && (queueMode === "replace" || queueMode === "preview")) {
+  // El preview optimista en vivo generaba baja calidad; se conserva solo para manual.
+  if (fromManual && (queueMode === "replace" || queueMode === "preview")) {
     var optimistic = buildOptimisticPreview(text);
     if (optimistic) {
       renderTranslationPreview(optimistic);
@@ -863,6 +998,36 @@ async function drainTranslationQueue() {
 
 function normalizeFlatText(text) {
   return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function resetLiveEnqueueState() {
+  lastLiveEnqueueTextNorm = "";
+  lastLiveEnqueueAt = 0;
+}
+
+function maybeEnqueueLiveTranslation(text, force) {
+  var value = String(text || "").trim();
+  if (!value) {
+    return;
+  }
+
+  var normalized = normalizeFlatText(value);
+  if (!normalized) {
+    return;
+  }
+
+  var now = Date.now();
+  var minGap = getLiveTranslationMode() === "fast" ? 280 : 420;
+  if (!force && normalized === lastLiveEnqueueTextNorm && (now - lastLiveEnqueueAt) < 1500) {
+    return;
+  }
+  if (!force && (now - lastLiveEnqueueAt) < minGap) {
+    return;
+  }
+
+  lastLiveEnqueueTextNorm = normalized;
+  lastLiveEnqueueAt = now;
+  enqueueTranslation(value, false, 0, "replace");
 }
 
 function isEffectiveClientTranslation(original, translated, source, target) {
@@ -1167,10 +1332,13 @@ async function processTranscript(text, fromManual, mode) {
     if (fromManual) {
       var transcriptState = typewriterStates.transcript;
       stopTypewriter("transcript");
+      transcriptCommittedText = text;
       transcriptState.raw = text;
       transcriptOutput.value = text;
+      transcriptOutput.classList.remove("streaming");
       autoScrollToEnd(transcriptOutput);
       transcriptForTranslation = text;
+      lastInterimChunk = "";
       translationCommittedText = "";
       liveTranslationPreviewText = "";
     }
@@ -1187,10 +1355,9 @@ async function processTranscript(text, fromManual, mode) {
     } else if (translationMode === "preview" && !fromManual) {
       renderTranslationPreview(translatedText);
     } else {
-      if (fromManual) {
-        translationCommittedText = translatedText;
-        liveTranslationPreviewText = "";
-      }
+      // Mantiene el buffer comprometido sincronizado con la salida visible.
+      translationCommittedText = translatedText;
+      liveTranslationPreviewText = "";
       animateTypeInto(translationOutput, translatedText, "translation");
     }
 
@@ -1300,14 +1467,17 @@ function startListening() {
   }
 
   listeningRequested = true;
-
-  recognition = new SpeechRecognitionCtor();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 5;
-  recognition.lang = resolveRecognitionLang(sourceSelect.value);
+  recognitionLastEventAt = Date.now();
+  initializeRecognitionInstance();
 
   recognition.onstart = function () {
+    clearRecognitionRestartTimer();
+    recognitionRestartAttempts = 0;
+    recognitionConsecutiveErrors = 0;
+    recognitionLastResultAt = Date.now();
+    recognitionLastEventAt = Date.now();
+    recognitionLastRestartAt = Date.now();
+    startRecognitionWatchdog();
     listening = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
@@ -1315,22 +1485,64 @@ function startListening() {
   };
 
   recognition.onerror = function (event) {
-    showError("Error de reconocimiento: " + (event.error || "desconocido"));
+    recognitionLastEventAt = Date.now();
+    var code = String(event && event.error ? event.error : "desconocido");
+
+    if (code === "aborted") {
+      if (!listeningRequested) {
+        return;
+      }
+      scheduleRecognitionRestart("error-aborted", 200);
+      return;
+    }
+
+    if (code === "no-speech") {
+      recognitionConsecutiveErrors = 0;
+      showError("");
+      return;
+    }
+
+    if (code === "not-allowed" || code === "service-not-allowed") {
+      listeningRequested = false;
+      stopRecognitionWatchdog();
+      clearRecognitionRestartTimer();
+      listening = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus("error", "Permiso de microfono denegado");
+      showError("Permiso de micrófono denegado. Habilítalo y vuelve a intentar.");
+      return;
+    }
+
+    if (!listeningRequested) {
+      return;
+    }
+
+    recognitionConsecutiveErrors += 1;
+    showError("Error de reconocimiento: " + code + ". Reintentando...");
+    scheduleRecognitionRestart("error-" + code, recognitionConsecutiveErrors >= 3 ? 520 : 260);
   };
 
   recognition.onend = function () {
-    var pending = String(lastInterimChunk || "").trim();
-    if (pending) {
-      appendTranscriptChunk(pending);
-      lastInterimChunk = "";
+    recognitionLastEventAt = Date.now();
+    clearInterimCommitTimer();
+    if (livePreviewDelayTimer) {
+      clearTimeout(livePreviewDelayTimer);
+      livePreviewDelayTimer = null;
     }
+    lastRenderedLiveSource = "";
+    liveTranslationPreviewText = "";
+    animateTypeInto(translationOutput, translationCommittedText, "translation");
+
+    commitPendingInterim("onend");
 
     var transcriptNow = getTranscriptFieldText();
     if (transcriptNow) {
-      enqueueTranslation(transcriptNow, false, 0, "replace");
+      maybeEnqueueLiveTranslation(transcriptNow, true);
     }
 
     listening = false;
+    stopRecognitionWatchdog();
     if (!listeningRequested) {
       startBtn.disabled = false;
       stopBtn.disabled = true;
@@ -1339,26 +1551,11 @@ function startListening() {
       return;
     }
 
-    setStatus("processing", "Reconectando escucha...");
-    setTimeout(function () {
-      try {
-        recognition.start();
-      } catch (_e) {
-        setTimeout(function () {
-          try {
-            recognition.start();
-          } catch (_e2) {
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            listeningRequested = false;
-            setStatus("error", "No se pudo reanudar");
-          }
-        }, 240);
-      }
-    }, 120);
+    scheduleRecognitionRestart("onend", 140);
   };
 
   recognition.onresult = function (event) {
+    recognitionLastEventAt = Date.now();
     var finalChunk = "";
     var interimChunk = "";
     for (var i = event.resultIndex; i < event.results.length; i += 1) {
@@ -1398,6 +1595,7 @@ function startListening() {
     if (finalChunk) {
       appendTranscriptChunk(finalChunk);
       lastInterimChunk = "";
+      recognitionLastResultAt = Date.now();
       if (livePreviewDelayTimer) {
         clearTimeout(livePreviewDelayTimer);
         livePreviewDelayTimer = null;
@@ -1406,26 +1604,202 @@ function startListening() {
 
     renderTranscriptLive(interimChunk);
 
+    if (interimChunk) {
+      scheduleInterimCommitBySilence();
+    } else {
+      clearInterimCommitTimer();
+    }
+
     var transcriptNow = getTranscriptFieldText();
     if (!transcriptNow || transcriptNow.length < 2) {
       return;
     }
 
-    // Requisito funcional: traducir siempre el contenido visible del textfield.
-    enqueueTranslation(transcriptNow, false, 0, "replace");
-
-    var now = Date.now();
-    var minLiveInterval = getLivePreviewIntervalMs();
-    if ((now - lastInterimTranslateAt) >= minLiveInterval) {
-      scheduleLivePreviewTranslation(transcriptNow);
-    }
+    // Traduce siempre el contenido actual del cuadro de transcripción.
+    maybeEnqueueLiveTranslation(transcriptNow, false);
+    lastInterimTranslateAt = Date.now();
+    recognitionLastResultAt = Date.now();
   };
 
   recognition.start();
 }
 
+function initializeRecognitionInstance() {
+  if (!SpeechRecognitionCtor) {
+    return;
+  }
+  if (recognition) {
+    try {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+    } catch (_e) {
+      // Ignorado.
+    }
+  }
+
+  recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 5;
+  recognition.lang = resolveRecognitionLang(sourceSelect.value);
+}
+
+function clearRecognitionRestartTimer() {
+  if (recognitionRestartTimer) {
+    clearTimeout(recognitionRestartTimer);
+    recognitionRestartTimer = null;
+  }
+}
+
+function stopRecognitionWatchdog() {
+  if (recognitionWatchdogTimer) {
+    clearInterval(recognitionWatchdogTimer);
+    recognitionWatchdogTimer = null;
+  }
+}
+
+function startRecognitionWatchdog() {
+  stopRecognitionWatchdog();
+  recognitionWatchdogTimer = setInterval(function () {
+    if (!listeningRequested || !listening) {
+      return;
+    }
+
+    var now = Date.now();
+    var idleMs = now - Number(recognitionLastResultAt || 0);
+    var staleMs = now - Number(recognitionLastEventAt || 0);
+
+    // Si el motor deja de emitir eventos, rehace la instancia completa.
+    if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
+      forceRecognitionRecovery("watchdog-stale");
+      return;
+    }
+
+    if (idleMs < WATCHDOG_SILENCE_THRESHOLD_MS) {
+      return;
+    }
+
+    commitPendingInterim("watchdog");
+
+    if ((Date.now() - recognitionLastRestartAt) < 850) {
+      return;
+    }
+
+    showError("Se detectó pausa en transcripción, reintentando captura...");
+    try {
+      if (recognition) {
+        recognition.stop();
+      }
+    } catch (_e) {
+      // Ignorado.
+    }
+    scheduleRecognitionRestart("watchdog", 220);
+  }, WATCHDOG_POLL_INTERVAL_MS);
+}
+
+function forceRecognitionRecovery(reason) {
+  if (!listeningRequested) {
+    return;
+  }
+
+  var now = Date.now();
+  if ((now - recognitionLastHardRecoveryAt) < 4500) {
+    return;
+  }
+  recognitionLastHardRecoveryAt = now;
+
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+
+  try {
+    if (recognition) {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      if (typeof recognition.abort === "function") {
+        recognition.abort();
+      } else {
+        recognition.stop();
+      }
+    }
+  } catch (_e) {
+    // Ignorado.
+  }
+
+  recognition = null;
+  listening = false;
+  showError("Transcripción pausada, reiniciando captura...");
+  scheduleRecognitionRestart(reason + "-hard", 280, true);
+}
+
+function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
+  if (!listeningRequested) {
+    return;
+  }
+
+  if (!skipThrottle && (Date.now() - recognitionLastRestartAt) < 250) {
+    return;
+  }
+
+  clearRecognitionRestartTimer();
+  stopRecognitionWatchdog();
+  setStatus("processing", "Reconectando escucha...");
+
+  recognitionRestartAttempts += 1;
+  if (recognitionRestartAttempts > 14) {
+    recognitionRestartAttempts = 0;
+    showError("Motor de voz saturado, aplicando recuperación profunda...");
+    forceRecognitionRecovery(reason + "-max-attempts");
+    return;
+  }
+
+  var backoff = Math.min(1800, Math.max(120, Number(delayMs || 180)) + (recognitionRestartAttempts - 1) * 120);
+  recognitionRestartTimer = setTimeout(function () {
+    if (!listeningRequested) {
+      return;
+    }
+
+    recognitionLastRestartAt = Date.now();
+    try {
+      if (!recognition) {
+        initializeRecognitionInstance();
+      }
+      if (recognition) {
+        recognition.lang = resolveRecognitionLang(sourceSelect.value);
+        recognition.start();
+        return;
+      }
+    } catch (_e) {
+      // Reintenta con nueva instancia en el siguiente bloque.
+    }
+
+    try {
+      initializeRecognitionInstance();
+      if (recognition) {
+        recognition.start();
+        return;
+      }
+    } catch (_e2) {
+      // Sigue al siguiente intento.
+    }
+
+    scheduleRecognitionRestart(reason + "-retry", backoff + 140);
+  }, backoff);
+}
+
 function stopListening() {
   listeningRequested = false;
+  recognitionConsecutiveErrors = 0;
+  recognitionLastEventAt = 0;
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  recognitionRestartAttempts = 0;
+  resetLiveEnqueueState();
   if (livePreviewDelayTimer) {
     clearTimeout(livePreviewDelayTimer);
     livePreviewDelayTimer = null;
@@ -1433,25 +1807,53 @@ function stopListening() {
   lastRenderedLiveSource = "";
   liveTranslationPreviewText = "";
   animateTypeInto(translationOutput, translationCommittedText, "translation");
-  var pending = String(lastInterimChunk || "").trim();
-  var normalizedPending = normalizeFlatText(pending);
-  var normalizedCurrent = normalizeFlatText(transcriptForTranslation);
-  if (pending && (!normalizedCurrent || normalizedCurrent.indexOf(normalizedPending) === -1)) {
-    appendTranscriptChunk(pending);
-    lastInterimChunk = "";
-  }
+  commitPendingInterim("stop");
 
   var transcriptNow = getTranscriptFieldText();
   if (transcriptNow) {
-    enqueueTranslation(transcriptNow, false, 0, "replace");
+    maybeEnqueueLiveTranslation(transcriptNow, true);
   }
 
   if (recognition) {
-    recognition.stop();
+    try {
+      recognition.stop();
+    } catch (_e) {
+      // Ignorado.
+    }
   }
 }
 
 function clearOutputs() {
+  clearInterimCommitTimer();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  recognitionRestartAttempts = 0;
+  recognitionLastResultAt = 0;
+  recognitionLastEventAt = 0;
+  recognitionConsecutiveErrors = 0;
+  recognitionLastRestartAt = 0;
+  recognitionLastHardRecoveryAt = 0;
+  resetLiveEnqueueState();
+  if (translateDebounceTimer) {
+    clearTimeout(translateDebounceTimer);
+    translateDebounceTimer = null;
+  }
+  if (typedTranslateDebounceTimer) {
+    clearTimeout(typedTranslateDebounceTimer);
+    typedTranslateDebounceTimer = null;
+  }
+  if (livePreviewDelayTimer) {
+    clearTimeout(livePreviewDelayTimer);
+    livePreviewDelayTimer = null;
+  }
+  if (activeTranslationController) {
+    try {
+      activeTranslationController.abort();
+    } catch (_eAbortActive) {
+      // Ignorado.
+    }
+    activeTranslationController = null;
+  }
   stopTypewriter("transcript");
   stopTypewriter("translation");
   transcriptCommittedText = "";
@@ -1467,6 +1869,7 @@ function clearOutputs() {
   lastRenderedLiveSource = "";
   queuedTranslationText = "";
   queuedTranslationFromManual = false;
+  queuedTranslationMode = "replace";
   translateInFlight = false;
   lastInterimChunk = "";
   manualInput.value = "";
@@ -1488,7 +1891,13 @@ function swapLanguages() {
     recognition.lang = resolveRecognitionLang(sourceSelect.value);
   }
 
+  resetLiveEnqueueState();
   persistUiPreferences();
+
+  var transcriptText = getTranscriptFieldText();
+  if (transcriptText) {
+    enqueueTranslation(transcriptText, false, 0, "replace");
+  }
 }
 
 function resolveRecognitionLang(code) {
@@ -1561,4 +1970,27 @@ async function copyText(value) {
   } catch (_e) {
     showError("No se pudo copiar al portapapeles.");
   }
+}
+
+function exportText(value, prefix) {
+  var text = stripVisualCursor(value);
+  if (!text) {
+    showError("No hay texto para exportar.");
+    return;
+  }
+
+  var safePrefix = String(prefix || "export").replace(/[^a-z0-9_-]+/gi, "-").toLowerCase();
+  var stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  var filename = safePrefix + "-" + stamp + ".txt";
+  var blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(function () {
+    URL.revokeObjectURL(url);
+  }, 0);
 }

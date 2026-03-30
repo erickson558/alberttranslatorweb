@@ -331,6 +331,8 @@ button:disabled {
 .pane-actions {
   display: inline-flex;
   gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .action-btn {

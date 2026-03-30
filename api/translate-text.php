@@ -31,10 +31,6 @@ if ($transcript === '') {
     ], 200);
 }
 
-if (strlen($transcript) > MAX_TRANSCRIPT_LENGTH) {
-    send_json(['error' => 'Texto demasiado largo para traducir.'], 413);
-}
-
 if (!is_valid_lang($target) || $target === 'auto') {
     send_json(['error' => 'Codigo de idioma destino invalido.'], 400);
 }

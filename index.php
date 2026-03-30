@@ -78,6 +78,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
           <h2>Transcripción</h2>
           <div class="pane-actions">
             <button id="copy-transcript" type="button" class="action-btn">Copiar</button>
+            <button id="export-transcript" type="button" class="action-btn">Exportar</button>
             <button id="speak-transcript" type="button" class="action-btn speaker-btn" title="Escuchar transcripción" aria-label="Escuchar transcripción">🔊</button>
           </div>
         </div>
@@ -89,6 +90,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
           <h2>Traducción</h2>
           <div class="pane-actions">
             <button id="copy-translation" type="button" class="action-btn">Copiar</button>
+            <button id="export-translation" type="button" class="action-btn">Exportar</button>
             <button id="speak-translation" type="button" class="action-btn speaker-btn" title="Escuchar traducción" aria-label="Escuchar traducción">🔊</button>
           </div>
         </div>

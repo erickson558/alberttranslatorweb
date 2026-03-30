@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.2` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.14` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -18,10 +18,12 @@ Version `V1.5.2` para EasyPHP, sin dependencias de Python y con arquitectura sep
 - Mejoras por frases en fallback EN->ES para evitar mezclas ingles/espanol en expresiones comunes.
 - Selector de proveedor free en la nube: `Auto`, `Google Free`, `MyMemory Free`.
 - `Google Free` configurado por defecto.
-- Traduccion en vivo de audio basada siempre en el contenido actual del textfield de transcripcion.
-- Menor perdida de palabras durante streaming al priorizar la mejor alternativa de reconocimiento.
+- Traduccion en vivo alineada con el contenido actual visible del cuadro de transcripcion.
+- Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
+- Menor perdida de palabras durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
-- Traduccion instantanea en UI (preview optimista + reemplazo rapido) para experiencia tipo Google Translator.
+- Exportacion separada de transcripcion y traduccion en TXT.
+- Traduccion server-side por fragmentos para evitar error por texto largo.
 - Efecto typewriter restaurado para la salida de traduccion.
 
 ## Arquitectura
@@ -66,7 +68,7 @@ Ejemplo JSON para traduccion:
 ## Buenas practicas aplicadas
 
 - Separacion de responsabilidades (frontend, api, backend).
-- Validacion de entrada en API y limites de longitud.
+- Validacion de entrada en API y traduccion por fragmentos para textos largos.
 - Endpoints con respuestas JSON consistentes.
 - Fallback de traduccion sin romper flujo de usuario.
 - Versionado centralizado en backend (`APP_VERSION`) y archivo `VERSION`.
