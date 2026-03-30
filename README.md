@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.17` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.18` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -22,6 +22,7 @@ Version `V1.5.17` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Preview local solo cuando la calidad minima es segura; la traduccion en vivo prioriza exactitud sobre pseudo-traducciones.
 - Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
 - Fusion inteligente de bloques `interim/final` para reducir repeticion de palabras y frases en la transcripcion.
+- Deduplicacion de cola reciente de transcripcion para bloques finales que reagrupan varias frases ya confirmadas.
 - Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
 - Menor perdida de palabras y frases cortas durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
@@ -40,6 +41,7 @@ Version `V1.5.17` para EasyPHP, sin dependencias de Python y con arquitectura se
 - `backend/http.php`: helpers HTTP/JSON.
 - `backend/translator_service.php`: logica de traduccion.
 - `tests/translation_smoke.php`: prueba de humo de traduccion.
+- `tests/transcript_merge_cases.js`: regresion de fusion/deduplicacion de transcripcion.
 
 ## Requisitos
 
@@ -72,6 +74,7 @@ Ejemplo JSON para traduccion:
 ## Validacion basica
 
 - Ejecuta `C:\Program Files (x86)\EasyPHP-Webserver-14.1b2\binaries\php\php.exe tests\translation_smoke.php` para una prueba rapida de traduccion.
+- Ejecuta `node tests\transcript_merge_cases.js` para validar deduplicacion de bloques de transcripcion.
 
 ## Buenas practicas aplicadas
 

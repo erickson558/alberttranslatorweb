@@ -607,6 +607,24 @@ function rebuildTranscriptForTranslation() {
     .trim();
 }
 
+function replaceTranscriptTail(lines, lineCount, text) {
+  var preserved = lines.slice(0, Math.max(0, lines.length - lineCount));
+  preserved.push(String(text || "").trim());
+  return preserved.filter(Boolean);
+}
+
+function buildTranscriptTailCandidates(lines, maxLines) {
+  var limit = Math.min(lines.length, Math.max(1, Number(maxLines || 1)));
+  var candidates = [];
+  for (var lineCount = limit; lineCount >= 1; lineCount -= 1) {
+    candidates.push({
+      lineCount: lineCount,
+      text: lines.slice(lines.length - lineCount).join(" "),
+    });
+  }
+  return candidates;
+}
+
 function normalizeSpeechMergeToken(token) {
   return String(token || "")
     .toLowerCase()
@@ -653,6 +671,23 @@ function isSpeechTokenPrefix(prefixText, fullText) {
 
   for (var i = 0; i < prefixTokens.length; i += 1) {
     if (prefixTokens[i].norm !== fullTokens[i].norm) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isSpeechTokenSuffix(suffixText, fullText) {
+  var suffixTokens = splitSpeechMergeTokens(suffixText);
+  var fullTokens = splitSpeechMergeTokens(fullText);
+  if (!suffixTokens.length || suffixTokens.length > fullTokens.length) {
+    return false;
+  }
+
+  var offset = fullTokens.length - suffixTokens.length;
+  for (var i = 0; i < suffixTokens.length; i += 1) {
+    if (suffixTokens[i].norm !== fullTokens[offset + i].norm) {
       return false;
     }
   }
@@ -761,7 +796,11 @@ function mergeTranscriptChunkIntoText(baseText, chunk) {
   }
 
   // Si el motor recicla una frase ya comprometida, no la vuelve a anexar.
-  if (speechTokensMatch(normalizedChunk, lastLine) || isSpeechTokenPrefix(normalizedChunk, lastLine)) {
+  if (
+    speechTokensMatch(normalizedChunk, lastLine)
+    || isSpeechTokenPrefix(normalizedChunk, lastLine)
+    || isSpeechTokenSuffix(normalizedChunk, lastLine)
+  ) {
     return {
       text: lines.join("\n"),
       changed: false,
@@ -769,24 +808,48 @@ function mergeTranscriptChunkIntoText(baseText, chunk) {
     };
   }
 
-  // Si el nuevo resultado extiende la ultima frase, sustituye en vez de duplicar.
-  if (isSpeechTokenPrefix(lastLine, normalizedChunk)) {
-    lines[lastLineIndex] = normalizedChunk;
-    return {
-      text: lines.join("\n"),
-      changed: normalizeFlatText(normalizedChunk) !== lastNormalized,
-      hasLiveChange: true,
-    };
-  }
+  // Algunos navegadores promueven un bloque final que combina varias frases ya comprometidas.
+  // Revisa la cola reciente completa para fusionar o ignorar sin duplicar lineas.
+  var tailCandidates = buildTranscriptTailCandidates(lines, 4);
+  for (var candidateIndex = 0; candidateIndex < tailCandidates.length; candidateIndex += 1) {
+    var tailCandidate = tailCandidates[candidateIndex];
+    var tailText = String(tailCandidate.text || "").trim();
+    if (!tailText) {
+      continue;
+    }
 
-  var overlapWordCount = findSpeechOverlapWordCount(lastLine, normalizedChunk);
-  if (isReliableSpeechOverlap(lastLine, normalizedChunk, overlapWordCount)) {
-    lines[lastLineIndex] = mergeSpeechChunks(lastLine, normalizedChunk, overlapWordCount);
-    return {
-      text: lines.join("\n"),
-      changed: normalizeFlatText(lines[lastLineIndex]) !== lastNormalized,
-      hasLiveChange: true,
-    };
+    if (
+      speechTokensMatch(normalizedChunk, tailText)
+      || isSpeechTokenPrefix(normalizedChunk, tailText)
+      || isSpeechTokenSuffix(normalizedChunk, tailText)
+    ) {
+      return {
+        text: lines.join("\n"),
+        changed: false,
+        hasLiveChange: false,
+      };
+    }
+
+    // Si el nuevo resultado extiende una cola ya comprometida, sustituye esa cola completa.
+    if (isSpeechTokenPrefix(tailText, normalizedChunk)) {
+      var replacedPrefixLines = replaceTranscriptTail(lines, tailCandidate.lineCount, normalizedChunk);
+      return {
+        text: replacedPrefixLines.join("\n"),
+        changed: normalizeFlatText(replacedPrefixLines.join("\n")) !== normalizeFlatText(lines.join("\n")),
+        hasLiveChange: true,
+      };
+    }
+
+    var overlapWordCount = findSpeechOverlapWordCount(tailText, normalizedChunk);
+    if (isReliableSpeechOverlap(tailText, normalizedChunk, overlapWordCount)) {
+      var mergedTail = mergeSpeechChunks(tailText, normalizedChunk, overlapWordCount);
+      var replacedOverlapLines = replaceTranscriptTail(lines, tailCandidate.lineCount, mergedTail);
+      return {
+        text: replacedOverlapLines.join("\n"),
+        changed: normalizeFlatText(replacedOverlapLines.join("\n")) !== normalizeFlatText(lines.join("\n")),
+        hasLiveChange: true,
+      };
+    }
   }
 
   lines.push(normalizedChunk);
@@ -886,8 +949,11 @@ function commitPendingInterim(reason) {
     return false;
   }
 
-  appendTranscriptChunk(pending);
+  var appended = appendTranscriptChunk(pending);
   lastInterimChunk = "";
+  if (!appended) {
+    return false;
+  }
 
   var transcriptNow = getTranscriptFieldText();
   if (transcriptNow) {
