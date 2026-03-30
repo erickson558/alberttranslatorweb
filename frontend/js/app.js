@@ -632,9 +632,8 @@ function canCommitInterimChunk(chunk) {
     return false;
   }
 
-  // Filtra ruido corto típico de resultados intermedios inestables.
-  var words = countWords(text);
-  if (words < 2 && text.length < 9) {
+  // Solo descarta ruido sin contenido alfanumérico; prioriza no perder frases cortas.
+  if (!/[a-z0-9áéíóúñü]/i.test(text)) {
     return false;
   }
 
@@ -1017,12 +1016,18 @@ function maybeEnqueueLiveTranslation(text, force) {
   }
 
   var now = Date.now();
-  var minGap = getLiveTranslationMode() === "fast" ? 280 : 420;
+  var minGap = getLiveTranslationMode() === "fast" ? 180 : 260;
   if (!force && normalized === lastLiveEnqueueTextNorm && (now - lastLiveEnqueueAt) < 1500) {
     return;
   }
   if (!force && (now - lastLiveEnqueueAt) < minGap) {
     return;
+  }
+
+  // Mantiene feedback visible mientras llega la traducción online final.
+  var optimistic = buildOptimisticPreview(value);
+  if (optimistic && normalizeFlatText(optimistic) !== normalized) {
+    renderTranslationPreview(optimistic);
   }
 
   lastLiveEnqueueTextNorm = normalized;
