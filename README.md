@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.16` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.17` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -21,6 +21,7 @@ Version `V1.5.16` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Traduccion en vivo alineada con el contenido actual visible del cuadro de transcripcion.
 - Preview local solo cuando la calidad minima es segura; la traduccion en vivo prioriza exactitud sobre pseudo-traducciones.
 - Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
+- Fusion inteligente de bloques `interim/final` para reducir repeticion de palabras y frases en la transcripcion.
 - Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
 - Menor perdida de palabras y frases cortas durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.

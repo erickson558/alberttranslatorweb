@@ -591,29 +591,236 @@ function autoScrollToEnd(textarea) {
   textarea.scrollTop = textarea.scrollHeight;
 }
 
-function appendTranscriptChunk(chunk) {
-  var normalizedChunk = normalizeQuestionPunctuation(String(chunk || "").trim(), sourceSelect.value);
-  if (!normalizedChunk) {
-    return;
+function splitTranscriptCommittedLines(text) {
+  return String(text || "")
+    .split(/\r?\n+/)
+    .map(function (line) {
+      return String(line || "").trim();
+    })
+    .filter(Boolean);
+}
+
+function rebuildTranscriptForTranslation() {
+  transcriptForTranslation = splitTranscriptCommittedLines(transcriptCommittedText)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeSpeechMergeToken(token) {
+  return String(token || "")
+    .toLowerCase()
+    .replace(/^[^a-z0-9áéíóúñü]+|[^a-z0-9áéíóúñü]+$/gi, "");
+}
+
+function splitSpeechMergeTokens(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map(function (token) {
+      return {
+        raw: String(token || ""),
+        norm: normalizeSpeechMergeToken(token),
+      };
+    })
+    .filter(function (token) {
+      return token.raw && token.norm;
+    });
+}
+
+function speechTokensMatch(textA, textB) {
+  var tokensA = splitSpeechMergeTokens(textA);
+  var tokensB = splitSpeechMergeTokens(textB);
+  if (tokensA.length !== tokensB.length) {
+    return false;
   }
 
-  if (transcriptCommittedText) {
-    transcriptCommittedText += "\n";
+  for (var i = 0; i < tokensA.length; i += 1) {
+    if (tokensA[i].norm !== tokensB[i].norm) {
+      return false;
+    }
   }
-  transcriptCommittedText += normalizedChunk;
-  transcriptForTranslation = transcriptForTranslation
-    ? (transcriptForTranslation + " " + normalizedChunk)
-    : normalizedChunk;
+
+  return tokensA.length > 0;
+}
+
+function isSpeechTokenPrefix(prefixText, fullText) {
+  var prefixTokens = splitSpeechMergeTokens(prefixText);
+  var fullTokens = splitSpeechMergeTokens(fullText);
+  if (!prefixTokens.length || prefixTokens.length > fullTokens.length) {
+    return false;
+  }
+
+  for (var i = 0; i < prefixTokens.length; i += 1) {
+    if (prefixTokens[i].norm !== fullTokens[i].norm) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function findSpeechOverlapWordCount(previousText, incomingText) {
+  var previousTokens = splitSpeechMergeTokens(previousText);
+  var incomingTokens = splitSpeechMergeTokens(incomingText);
+  if (!previousTokens.length || !incomingTokens.length) {
+    return 0;
+  }
+
+  var maxOverlap = Math.min(previousTokens.length, incomingTokens.length);
+  for (var overlap = maxOverlap; overlap >= 1; overlap -= 1) {
+    var matches = true;
+    for (var i = 0; i < overlap; i += 1) {
+      if (previousTokens[previousTokens.length - overlap + i].norm !== incomingTokens[i].norm) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return overlap;
+    }
+  }
+
+  return 0;
+}
+
+function isReliableSpeechOverlap(previousText, incomingText, overlapWordCount) {
+  if (overlapWordCount <= 0) {
+    return false;
+  }
+
+  var previousTokens = splitSpeechMergeTokens(previousText);
+  var incomingTokens = splitSpeechMergeTokens(incomingText);
+  if (overlapWordCount > previousTokens.length || overlapWordCount > incomingTokens.length) {
+    return false;
+  }
+
+  var overlapText = incomingTokens
+    .slice(0, overlapWordCount)
+    .map(function (token) {
+      return token.norm;
+    })
+    .join(" ");
+
+  if (overlapWordCount >= 3) {
+    return true;
+  }
+  if (overlapWordCount === 2) {
+    return overlapText.length >= 8;
+  }
+  return overlapText.length >= 6;
+}
+
+function mergeSpeechChunks(previousText, incomingText, overlapWordCount) {
+  var previousTokens = String(previousText || "").trim().split(/\s+/).filter(Boolean);
+  var incomingTokens = String(incomingText || "").trim().split(/\s+/).filter(Boolean);
+  if (!previousTokens.length) {
+    return normalizeQuestionPunctuation(String(incomingText || "").trim(), sourceSelect.value);
+  }
+  if (!incomingTokens.length) {
+    return normalizeQuestionPunctuation(String(previousText || "").trim(), sourceSelect.value);
+  }
+
+  var overlap = Math.max(0, Math.min(Number(overlapWordCount || 0), incomingTokens.length));
+  return normalizeQuestionPunctuation(
+    previousTokens.concat(incomingTokens.slice(overlap)).join(" "),
+    sourceSelect.value
+  );
+}
+
+function mergeTranscriptChunkIntoText(baseText, chunk) {
+  var normalizedChunk = normalizeQuestionPunctuation(String(chunk || "").trim(), sourceSelect.value);
+  var lines = splitTranscriptCommittedLines(baseText);
+  if (!normalizedChunk) {
+    return {
+      text: lines.join("\n"),
+      changed: false,
+      hasLiveChange: false,
+    };
+  }
+
+  if (!lines.length) {
+    return {
+      text: normalizedChunk,
+      changed: true,
+      hasLiveChange: true,
+    };
+  }
+
+  var lastLineIndex = lines.length - 1;
+  var lastLine = lines[lastLineIndex];
+  var lastNormalized = normalizeFlatText(lastLine);
+  var incomingNormalized = normalizeFlatText(normalizedChunk);
+
+  if (!incomingNormalized) {
+    return {
+      text: lines.join("\n"),
+      changed: false,
+      hasLiveChange: false,
+    };
+  }
+
+  // Si el motor recicla una frase ya comprometida, no la vuelve a anexar.
+  if (speechTokensMatch(normalizedChunk, lastLine) || isSpeechTokenPrefix(normalizedChunk, lastLine)) {
+    return {
+      text: lines.join("\n"),
+      changed: false,
+      hasLiveChange: false,
+    };
+  }
+
+  // Si el nuevo resultado extiende la ultima frase, sustituye en vez de duplicar.
+  if (isSpeechTokenPrefix(lastLine, normalizedChunk)) {
+    lines[lastLineIndex] = normalizedChunk;
+    return {
+      text: lines.join("\n"),
+      changed: normalizeFlatText(normalizedChunk) !== lastNormalized,
+      hasLiveChange: true,
+    };
+  }
+
+  var overlapWordCount = findSpeechOverlapWordCount(lastLine, normalizedChunk);
+  if (isReliableSpeechOverlap(lastLine, normalizedChunk, overlapWordCount)) {
+    lines[lastLineIndex] = mergeSpeechChunks(lastLine, normalizedChunk, overlapWordCount);
+    return {
+      text: lines.join("\n"),
+      changed: normalizeFlatText(lines[lastLineIndex]) !== lastNormalized,
+      hasLiveChange: true,
+    };
+  }
+
+  lines.push(normalizedChunk);
+  return {
+    text: lines.join("\n"),
+    changed: true,
+    hasLiveChange: true,
+  };
+}
+
+function appendTranscriptChunk(chunk) {
+  var merged = mergeTranscriptChunkIntoText(transcriptCommittedText, chunk);
+  if (!merged.changed) {
+    return false;
+  }
+
+  transcriptCommittedText = merged.text;
+  rebuildTranscriptForTranslation();
   transcriptOutput.classList.remove("streaming");
   animateTypeInto(transcriptOutput, transcriptCommittedText, "transcript");
+  return true;
 }
 
 function renderTranscriptLive(interimText) {
   var normalizedInterim = normalizeQuestionPunctuation(String(interimText || "").trim(), sourceSelect.value);
   var text = transcriptCommittedText;
   if (normalizedInterim) {
-    text = text ? (text + "\n" + normalizedInterim) : normalizedInterim;
-    transcriptOutput.classList.add("streaming");
+    var mergedPreview = mergeTranscriptChunkIntoText(transcriptCommittedText, normalizedInterim);
+    text = mergedPreview.text;
+    if (mergedPreview.hasLiveChange && normalizeFlatText(text) !== normalizeFlatText(transcriptCommittedText)) {
+      transcriptOutput.classList.add("streaming");
+    } else {
+      transcriptOutput.classList.remove("streaming");
+    }
   } else {
     transcriptOutput.classList.remove("streaming");
   }
@@ -642,12 +849,7 @@ function clearInterimCommitTimer() {
 }
 
 function getLastCommittedTranscriptNormalized() {
-  var lines = String(transcriptCommittedText || "")
-    .split(/\r?\n+/)
-    .map(function (line) {
-      return String(line || "").trim();
-    })
-    .filter(Boolean);
+  var lines = splitTranscriptCommittedLines(transcriptCommittedText);
   if (!lines.length) {
     return "";
   }
