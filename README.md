@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.19` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.20` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -26,6 +26,7 @@ Version `V1.5.19` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Typewriter restaurado en transcripcion sin usar el textarea animado como fuente de verdad para traduccion/copia/exportacion.
 - Reconstruccion de la sesion de voz desde `SpeechRecognitionResultList` completa para reducir perdida de transcripcion en vivo.
 - Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
+- Politica de watchdog ajustada para no reconectar por silencios normales y limpiar errores transitorios al recuperar escucha.
 - Menor perdida de palabras y frases cortas durante streaming al confirmar intermedios por silencio y al priorizar la mejor alternativa de reconocimiento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
 - Exportacion separada de transcripcion y traduccion en TXT.
@@ -44,6 +45,7 @@ Version `V1.5.19` para EasyPHP, sin dependencias de Python y con arquitectura se
 - `backend/translator_service.php`: logica de traduccion.
 - `tests/translation_smoke.php`: prueba de humo de traduccion.
 - `tests/transcript_merge_cases.js`: regresion de fusion/deduplicacion de transcripcion.
+- `tests/recognition_watchdog_cases.js`: regresion de politica del watchdog de reconocimiento.
 
 ## Requisitos
 
@@ -77,6 +79,7 @@ Ejemplo JSON para traduccion:
 
 - Ejecuta `C:\Program Files (x86)\EasyPHP-Webserver-14.1b2\binaries\php\php.exe tests\translation_smoke.php` para una prueba rapida de traduccion.
 - Ejecuta `node tests\transcript_merge_cases.js` para validar deduplicacion de bloques de transcripcion.
+- Ejecuta `node tests\recognition_watchdog_cases.js` para validar que el watchdog no reconecte por silencio normal.
 
 ## Buenas practicas aplicadas
 

@@ -102,7 +102,7 @@ const typewriterStates = {
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
 };
 const WATCHDOG_SILENCE_THRESHOLD_MS = 10000;
-const WATCHDOG_STALE_THRESHOLD_MS = 15000;
+const WATCHDOG_STALE_THRESHOLD_MS = 30000;
 const WATCHDOG_POLL_INTERVAL_MS = 3000;
 
 const LOCAL_GLOSSARY_EN_ES = {
@@ -652,6 +652,23 @@ function resetRecognitionSessionState() {
   recognitionSessionFinalText = "";
   recognitionSessionInterimText = "";
   lastInterimChunk = "";
+}
+
+function hasPendingRecognitionInterim() {
+  return String(recognitionSessionInterimText || lastInterimChunk || "").trim().length > 0;
+}
+
+function getRecognitionWatchdogAction(idleMs, staleMs, hasPendingInterim) {
+  if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
+    return "hard-recovery";
+  }
+
+  // El silencio normal no debe forzar reconexion; solo confirma el interim si existe.
+  if (hasPendingInterim && idleMs >= WATCHDOG_SILENCE_THRESHOLD_MS) {
+    return "commit-interim";
+  }
+
+  return "none";
 }
 
 function replaceTranscriptTail(lines, lineCount, text) {
@@ -1883,6 +1900,7 @@ function startListening() {
     listening = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
+    showError("");
     setStatus("listening", "Escuchando en vivo");
   };
 
@@ -1953,6 +1971,7 @@ function startListening() {
 
   recognition.onresult = function (event) {
     recognitionLastEventAt = Date.now();
+    showError("");
     // Reconstruye el estado completo de la sesion actual para no depender de concatenaciones incrementales.
     var snapshot = buildRecognitionSnapshot(event.results);
     recognitionSessionFinalText = snapshot.finalText;
@@ -2035,32 +2054,21 @@ function startRecognitionWatchdog() {
     var now = Date.now();
     var idleMs = now - Number(recognitionLastResultAt || 0);
     var staleMs = now - Number(recognitionLastEventAt || 0);
+    var action = getRecognitionWatchdogAction(idleMs, staleMs, hasPendingRecognitionInterim());
 
-    // Si el motor deja de emitir eventos, rehace la instancia completa.
-    if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
+    // Si el motor deja de emitir eventos por demasiado tiempo, rehace la instancia completa.
+    if (action === "hard-recovery") {
       forceRecognitionRecovery("watchdog-stale");
       return;
     }
 
-    if (idleMs < WATCHDOG_SILENCE_THRESHOLD_MS) {
+    if (action !== "commit-interim") {
       return;
     }
 
-    commitPendingInterim("watchdog");
-
-    if ((Date.now() - recognitionLastRestartAt) < 850) {
-      return;
+    if (commitPendingInterim("watchdog")) {
+      recognitionLastResultAt = Date.now();
     }
-
-    showError("Se detectó pausa en transcripción, reintentando captura...");
-    try {
-      if (recognition) {
-        recognition.stop();
-      }
-    } catch (_e) {
-      // Ignorado.
-    }
-    scheduleRecognitionRestart("watchdog", 220);
   }, WATCHDOG_POLL_INTERVAL_MS);
 }
 
@@ -2097,7 +2105,7 @@ function forceRecognitionRecovery(reason) {
 
   recognition = null;
   listening = false;
-  showError("Transcripción pausada, reiniciando captura...");
+  showError("");
   scheduleRecognitionRestart(reason + "-hard", 280, true);
 }
 
@@ -2112,6 +2120,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
 
   clearRecognitionRestartTimer();
   stopRecognitionWatchdog();
+  showError("");
   setStatus("processing", "Reconectando escucha...");
 
   recognitionRestartAttempts += 1;
