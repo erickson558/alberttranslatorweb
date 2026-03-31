@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version `V1.5.23` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.5.24` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
@@ -32,6 +32,7 @@ Version `V1.5.23` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Menor perdida de palabras y frases cortas durante streaming al priorizar la mejor alternativa de reconocimiento y guardar el ultimo interim antes de una recuperacion real.
 - Recuperacion dura mas temprana cuando el motor pasa demasiado tiempo sin emitir eventos, para reducir huecos largos de audio perdido.
 - Wiring de handlers de `SpeechRecognition` restaurado para que las instancias recreadas por reconexion sigan capturando resultados y errores.
+- Commit y render de bloques multi-frase por linea para no colapsar frases distintas cuando el motor devuelve varios resultados en un mismo evento.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
 - Exportacion separada de transcripcion y traduccion en TXT.
 - Traduccion server-side por fragmentos para evitar error por texto largo.
@@ -53,6 +54,7 @@ Version `V1.5.23` para EasyPHP, sin dependencias de Python y con arquitectura se
 - `tests/recognition_recovery_commit_cases.js`: regresion de guardado del ultimo texto antes de reiniciar una sesion de voz rota.
 - `tests/recognition_result_ledger_cases.js`: regresion del ledger por indice para no perder bloques previos entre eventos.
 - `tests/recognition_handler_binding_cases.js`: regresion de wiring para reconexiones y recreacion de la instancia de voz.
+- `tests/recognition_multiline_commit_cases.js`: regresion para preservar frases separadas dentro de un mismo bloque final/interim.
 
 ## Requisitos
 
@@ -90,6 +92,7 @@ Ejemplo JSON para traduccion:
 - Ejecuta `node tests\recognition_recovery_commit_cases.js` para validar que una recuperacion real no pierda el ultimo texto capturado.
 - Ejecuta `node tests\recognition_result_ledger_cases.js` para validar que los resultados previos de la sesion no desaparezcan cuando cambia solo la cola.
 - Ejecuta `node tests\recognition_handler_binding_cases.js` para validar que una instancia recreada siga teniendo `onresult`, `onerror`, `onend` y `onstart`.
+- Ejecuta `node tests\recognition_multiline_commit_cases.js` para validar que varias frases del mismo bloque no se aplanen ni se pierdan.
 
 ## Buenas practicas aplicadas
 

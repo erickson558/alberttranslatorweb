@@ -620,13 +620,41 @@ function rebuildTranscriptForTranslation() {
     .trim();
 }
 
+function mergeTranscriptBlockIntoText(baseText, chunkText) {
+  var merged = String(baseText || "");
+  var chunkLines = splitTranscriptCommittedLines(chunkText);
+  var changed = false;
+
+  if (!chunkLines.length) {
+    return {
+      text: merged,
+      changed: false,
+      hasLiveChange: false,
+    };
+  }
+
+  for (var i = 0; i < chunkLines.length; i += 1) {
+    var lineMerge = mergeTranscriptChunkIntoText(merged, chunkLines[i]);
+    if (lineMerge.changed) {
+      merged = lineMerge.text;
+      changed = true;
+    }
+  }
+
+  return {
+    text: merged,
+    changed: changed,
+    hasLiveChange: changed,
+  };
+}
+
 function syncTranscriptModelState() {
   // Mantiene separado el historial confirmado del texto provisional de la sesion actual.
   transcriptCommittedText = joinTranscriptBlocks([transcriptHistoryText, recognitionSessionFinalText]);
   rebuildTranscriptForTranslation();
 
   if (recognitionSessionInterimText) {
-    transcriptDisplayText = mergeTranscriptChunkIntoText(transcriptCommittedText, recognitionSessionInterimText).text;
+    transcriptDisplayText = mergeTranscriptBlockIntoText(transcriptCommittedText, recognitionSessionInterimText).text;
   } else {
     transcriptDisplayText = transcriptCommittedText;
   }
@@ -918,7 +946,7 @@ function mergeTranscriptChunkIntoText(baseText, chunk) {
 
 function appendTranscriptChunk(chunk) {
   // Promueve el texto al historial estable para que no dependa del render visual.
-  var merged = mergeTranscriptChunkIntoText(transcriptCommittedText, chunk);
+  var merged = mergeTranscriptBlockIntoText(transcriptCommittedText, chunk);
   if (!merged.changed) {
     return false;
   }
@@ -1666,12 +1694,12 @@ function commitRecognitionSession(includeInterim, reason) {
   var mergedHistory = transcriptHistoryText;
 
   if (recognitionSessionFinalText) {
-    mergedHistory = mergeTranscriptChunkIntoText(mergedHistory, recognitionSessionFinalText).text;
+    mergedHistory = mergeTranscriptBlockIntoText(mergedHistory, recognitionSessionFinalText).text;
   }
 
   var pendingInterim = String(recognitionSessionInterimText || lastInterimChunk || "").trim();
   if (includeInterim && canCommitInterimChunk(pendingInterim)) {
-    mergedHistory = mergeTranscriptChunkIntoText(mergedHistory, pendingInterim).text;
+    mergedHistory = mergeTranscriptBlockIntoText(mergedHistory, pendingInterim).text;
   }
 
   var changed = normalizeFlatText(mergedHistory) !== normalizeFlatText(transcriptHistoryText)
