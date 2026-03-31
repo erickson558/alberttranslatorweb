@@ -1905,20 +1905,10 @@ async function checkHealth() {
   }
 }
 
-function startListening() {
-  showError("");
-  if (!SpeechRecognitionCtor) {
-    showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
+function bindRecognitionHandlers() {
+  if (!recognition) {
     return;
   }
-
-  if (listening) {
-    return;
-  }
-
-  listeningRequested = true;
-  recognitionLastEventAt = Date.now();
-  initializeRecognitionInstance();
 
   recognition.onstart = function () {
     clearRecognitionRestartTimer();
@@ -2039,6 +2029,27 @@ function startListening() {
     lastInterimTranslateAt = Date.now();
     recognitionLastResultAt = Date.now();
   };
+}
+
+function prepareRecognitionInstance() {
+  initializeRecognitionInstance();
+  bindRecognitionHandlers();
+}
+
+function startListening() {
+  showError("");
+  if (!SpeechRecognitionCtor) {
+    showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
+    return;
+  }
+
+  if (listening) {
+    return;
+  }
+
+  listeningRequested = true;
+  recognitionLastEventAt = Date.now();
+  prepareRecognitionInstance();
 
   recognition.start();
 }
@@ -2166,7 +2177,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
     recognitionLastRestartAt = Date.now();
     try {
       if (!recognition) {
-        initializeRecognitionInstance();
+        prepareRecognitionInstance();
       }
       if (recognition) {
         recognition.lang = resolveRecognitionLang(sourceSelect.value);
@@ -2178,7 +2189,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
     }
 
     try {
-      initializeRecognitionInstance();
+      prepareRecognitionInstance();
       if (recognition) {
         recognition.start();
         return;
