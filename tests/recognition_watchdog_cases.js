@@ -5,10 +5,9 @@
   Motor estancado: fuerza recuperacion.
 */
 
-const WATCHDOG_SILENCE_THRESHOLD_MS = 10000;
-const WATCHDOG_STALE_THRESHOLD_MS = 30000;
+const WATCHDOG_STALE_THRESHOLD_MS = 15000;
 
-function getRecognitionWatchdogAction(idleMs, staleMs, hasPendingInterim) {
+function getRecognitionWatchdogAction(staleMs) {
   if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
     return "hard-recovery";
   }
@@ -19,15 +18,15 @@ const cases = [
   { idleMs: 4000, staleMs: 4000, hasPendingInterim: false, expected: "none" },
   { idleMs: 12000, staleMs: 12000, hasPendingInterim: false, expected: "none" },
   { idleMs: 12000, staleMs: 12000, hasPendingInterim: true, expected: "none" },
-  { idleMs: 22000, staleMs: 22000, hasPendingInterim: false, expected: "none" },
-  { idleMs: 31000, staleMs: 31000, hasPendingInterim: false, expected: "hard-recovery" },
-  { idleMs: 31000, staleMs: 31000, hasPendingInterim: true, expected: "hard-recovery" },
+  { idleMs: 14000, staleMs: 14000, hasPendingInterim: false, expected: "none" },
+  { idleMs: 15000, staleMs: 15000, hasPendingInterim: false, expected: "hard-recovery" },
+  { idleMs: 17000, staleMs: 17000, hasPendingInterim: true, expected: "hard-recovery" },
 ];
 
 let failed = false;
 for (let i = 0; i < cases.length; i += 1) {
   const current = cases[i];
-  const got = getRecognitionWatchdogAction(current.idleMs, current.staleMs, current.hasPendingInterim);
+  const got = getRecognitionWatchdogAction(current.staleMs);
   if (got !== current.expected) {
     failed = true;
     console.error("[FAIL]", { current, got });

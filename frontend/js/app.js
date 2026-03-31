@@ -75,6 +75,7 @@ let transcriptForTranslation = "";
 let transcriptHistoryText = "";
 let recognitionSessionFinalText = "";
 let recognitionSessionInterimText = "";
+let recognitionResultsLedger = [];
 let translationCommittedText = "";
 let liveTranslationPreviewText = "";
 let lastInterimTranslateAt = 0;
@@ -101,8 +102,7 @@ const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
 };
-const WATCHDOG_SILENCE_THRESHOLD_MS = 10000;
-const WATCHDOG_STALE_THRESHOLD_MS = 30000;
+const WATCHDOG_STALE_THRESHOLD_MS = 15000;
 const WATCHDOG_POLL_INTERVAL_MS = 3000;
 
 const LOCAL_GLOSSARY_EN_ES = {
@@ -652,13 +652,10 @@ function resetRecognitionSessionState() {
   recognitionSessionFinalText = "";
   recognitionSessionInterimText = "";
   lastInterimChunk = "";
+  recognitionResultsLedger = [];
 }
 
-function hasPendingRecognitionInterim() {
-  return String(recognitionSessionInterimText || lastInterimChunk || "").trim().length > 0;
-}
-
-function getRecognitionWatchdogAction(idleMs, staleMs, hasPendingInterim) {
+function getRecognitionWatchdogAction(staleMs) {
   if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
     return "hard-recovery";
   }
@@ -1597,28 +1594,62 @@ function pickBestSpeechAlternative(result) {
   return bestText;
 }
 
-function buildRecognitionSnapshot(results) {
+function getRecognitionResultText(result) {
+  var text = pickBestSpeechAlternative(result);
+  if (!text) {
+    text = String((result && result[0] && result[0].transcript) || "").trim();
+  }
+  return normalizeQuestionPunctuation(String(text || "").trim(), sourceSelect.value);
+}
+
+function updateRecognitionResultsLedger(results, resultIndex) {
+  if (!results || typeof results.length !== "number") {
+    recognitionResultsLedger = [];
+    return;
+  }
+
+  var startIndex = typeof resultIndex === "number" && resultIndex >= 0
+    ? resultIndex
+    : 0;
+
+  if (!recognitionResultsLedger.length && startIndex > 0) {
+    startIndex = 0;
+  }
+
+  for (var i = startIndex; i < results.length; i += 1) {
+    var result = results[i];
+    var text = getRecognitionResultText(result);
+    recognitionResultsLedger[i] = {
+      text: text,
+      isFinal: !!(result && result.isFinal),
+    };
+  }
+
+  // Mantiene la cola previa si solo cambio un rango final, pero descarta residuos
+  // cuando el motor reduce la lista al iniciar una sesion nueva.
+  recognitionResultsLedger.length = results.length;
+}
+
+function buildRecognitionSnapshot(results, resultIndex) {
+  updateRecognitionResultsLedger(results, resultIndex);
+
   var finalParts = [];
   var interimParts = [];
-  if (!results || typeof results.length !== "number") {
+  if (!recognitionResultsLedger.length) {
     return {
       finalText: "",
       interimText: "",
     };
   }
 
-  for (var i = 0; i < results.length; i += 1) {
-    var result = results[i];
-    var text = pickBestSpeechAlternative(result);
-    if (!text) {
-      text = String((result && result[0] && result[0].transcript) || "").trim();
-    }
-    text = normalizeQuestionPunctuation(String(text || "").trim(), sourceSelect.value);
+  for (var i = 0; i < recognitionResultsLedger.length; i += 1) {
+    var entry = recognitionResultsLedger[i];
+    var text = String((entry && entry.text) || "").trim();
     if (!text) {
       continue;
     }
 
-    if (result.isFinal) {
+    if (entry.isFinal) {
       finalParts.push(text);
     } else {
       interimParts.push(text);
@@ -1893,6 +1924,7 @@ function startListening() {
     clearRecognitionRestartTimer();
     recognitionRestartAttempts = 0;
     recognitionConsecutiveErrors = 0;
+    resetRecognitionSessionState();
     recognitionLastResultAt = Date.now();
     recognitionLastEventAt = Date.now();
     recognitionLastRestartAt = Date.now();
@@ -1974,8 +2006,9 @@ function startListening() {
   recognition.onresult = function (event) {
     recognitionLastEventAt = Date.now();
     showError("");
-    // Reconstruye el estado completo de la sesion actual para no depender de concatenaciones incrementales.
-    var snapshot = buildRecognitionSnapshot(event.results);
+    // Mantiene un ledger por indice para no perder bloques previos si el navegador
+    // solo actualiza la cola cambiada o reescribe una parte de la sesion.
+    var snapshot = buildRecognitionSnapshot(event.results, event.resultIndex);
     recognitionSessionFinalText = snapshot.finalText;
     recognitionSessionInterimText = snapshot.interimText;
     lastInterimChunk = recognitionSessionInterimText;
@@ -2054,9 +2087,8 @@ function startRecognitionWatchdog() {
     }
 
     var now = Date.now();
-    var idleMs = now - Number(recognitionLastResultAt || 0);
     var staleMs = now - Number(recognitionLastEventAt || 0);
-    var action = getRecognitionWatchdogAction(idleMs, staleMs, hasPendingRecognitionInterim());
+    var action = getRecognitionWatchdogAction(staleMs);
 
     // Si el motor deja de emitir eventos por demasiado tiempo, rehace la instancia completa.
     if (action === "hard-recovery") {
