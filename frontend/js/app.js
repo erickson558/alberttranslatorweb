@@ -93,9 +93,15 @@ let recognitionWatchdogTimer = null;
 let recognitionRestartAttempts = 0;
 let recognitionLastResultAt = 0;
 let recognitionLastEventAt = 0;
+let recognitionLastSpeechActivityAt = 0;
 let recognitionConsecutiveErrors = 0;
 let recognitionLastRestartAt = 0;
 let recognitionLastHardRecoveryAt = 0;
+let recognitionActivityStream = null;
+let recognitionActivityContext = null;
+let recognitionActivitySource = null;
+let recognitionActivityAnalyser = null;
+let recognitionActivityTimer = null;
 let lastLiveEnqueueTextNorm = "";
 let lastLiveEnqueueAt = 0;
 const typewriterStates = {
@@ -104,6 +110,8 @@ const typewriterStates = {
 };
 const WATCHDOG_STALE_THRESHOLD_MS = 15000;
 const WATCHDOG_POLL_INTERVAL_MS = 3000;
+const WATCHDOG_ACTIVE_SPEECH_WINDOW_MS = 2200;
+const WATCHDOG_ACTIVE_SPEECH_RESULT_GAP_MS = 4200;
 
 const LOCAL_GLOSSARY_EN_ES = {
   hello: "hola", hi: "hola", how: "cómo", are: "estás", you: "tú", today: "hoy", tomorrow: "mañana", yesterday: "ayer",
@@ -143,6 +151,8 @@ function initSpeechUnloadGuards() {
   // Evita que la voz siga al recargar/cerrar la pagina.
   window.addEventListener("beforeunload", forceStopSpeech, false);
   window.addEventListener("pagehide", forceStopSpeech, false);
+  window.addEventListener("beforeunload", stopRecognitionActivityMonitor, false);
+  window.addEventListener("pagehide", stopRecognitionActivityMonitor, false);
   window.addEventListener("beforeunload", persistUiPreferences, false);
   // Si la pestaña regresa a primer plano, intenta retomar la escucha caída.
   document.addEventListener("visibilitychange", function () {
@@ -691,6 +701,11 @@ function getRecognitionWatchdogAction(staleMs) {
   return "none";
 }
 
+function shouldRecoverFromSpeechActivity(resultGapMs, speechGapMs) {
+  return resultGapMs >= WATCHDOG_ACTIVE_SPEECH_RESULT_GAP_MS
+    && speechGapMs <= WATCHDOG_ACTIVE_SPEECH_WINDOW_MS;
+}
+
 function replaceTranscriptTail(lines, lineCount, text) {
   var preserved = lines.slice(0, Math.max(0, lines.length - lineCount));
   preserved.push(String(text || "").trim());
@@ -977,6 +992,110 @@ function composeTranscriptForTranslation(interimText) {
 function getTranscriptFieldText() {
   // La traduccion, copia y exportacion deben leer el modelo canonico, no el textarea animado.
   return String(transcriptDisplayText || transcriptCommittedText || "").trim();
+}
+
+function stopRecognitionActivityMonitor() {
+  if (recognitionActivityTimer) {
+    clearInterval(recognitionActivityTimer);
+    recognitionActivityTimer = null;
+  }
+
+  if (recognitionActivitySource) {
+    try {
+      recognitionActivitySource.disconnect();
+    } catch (_eSource) {
+      // Ignorado.
+    }
+    recognitionActivitySource = null;
+  }
+
+  recognitionActivityAnalyser = null;
+
+  if (recognitionActivityStream) {
+    try {
+      var tracks = recognitionActivityStream.getTracks ? recognitionActivityStream.getTracks() : [];
+      for (var i = 0; i < tracks.length; i += 1) {
+        tracks[i].stop();
+      }
+    } catch (_eStream) {
+      // Ignorado.
+    }
+    recognitionActivityStream = null;
+  }
+
+  if (recognitionActivityContext) {
+    try {
+      if (typeof recognitionActivityContext.close === "function") {
+        recognitionActivityContext.close();
+      }
+    } catch (_eContext) {
+      // Ignorado.
+    }
+    recognitionActivityContext = null;
+  }
+
+  recognitionLastSpeechActivityAt = 0;
+}
+
+function startRecognitionActivityMonitor() {
+  if (
+    recognitionActivityTimer
+    || !listeningRequested
+    || !navigator.mediaDevices
+    || typeof navigator.mediaDevices.getUserMedia !== "function"
+  ) {
+    return;
+  }
+
+  var AudioContextCtor = window.AudioContext || window.webkitAudioContext || null;
+  if (!AudioContextCtor) {
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  }).then(function (stream) {
+    if (!listeningRequested) {
+      var pendingTracks = stream.getTracks ? stream.getTracks() : [];
+      for (var i = 0; i < pendingTracks.length; i += 1) {
+        pendingTracks[i].stop();
+      }
+      return;
+    }
+
+    recognitionActivityStream = stream;
+    recognitionActivityContext = new AudioContextCtor();
+    recognitionActivityAnalyser = recognitionActivityContext.createAnalyser();
+    recognitionActivityAnalyser.fftSize = 1024;
+    recognitionActivityAnalyser.smoothingTimeConstant = 0.2;
+    recognitionActivitySource = recognitionActivityContext.createMediaStreamSource(stream);
+    recognitionActivitySource.connect(recognitionActivityAnalyser);
+
+    var buffer = new Uint8Array(recognitionActivityAnalyser.fftSize);
+    recognitionActivityTimer = setInterval(function () {
+      if (!recognitionActivityAnalyser) {
+        return;
+      }
+
+      recognitionActivityAnalyser.getByteTimeDomainData(buffer);
+      var energy = 0;
+      for (var j = 0; j < buffer.length; j += 1) {
+        var sample = (buffer[j] - 128) / 128;
+        energy += sample * sample;
+      }
+
+      var rms = Math.sqrt(energy / buffer.length);
+      if (rms >= 0.045) {
+        recognitionLastSpeechActivityAt = Date.now();
+      }
+    }, 140);
+  }).catch(function () {
+    // Best effort: si el monitor no puede abrir audio, la escucha sigue funcionando igual.
+  });
 }
 
 function clearInterimCommitTimer() {
@@ -1975,6 +2094,7 @@ function bindRecognitionHandlers() {
 
     if (code === "not-allowed" || code === "service-not-allowed") {
       listeningRequested = false;
+      stopRecognitionActivityMonitor();
       stopRecognitionWatchdog();
       clearRecognitionRestartTimer();
       listening = false;
@@ -2076,7 +2196,9 @@ function startListening() {
   }
 
   listeningRequested = true;
+  recognitionLastSpeechActivityAt = 0;
   recognitionLastEventAt = Date.now();
+  startRecognitionActivityMonitor();
   prepareRecognitionInstance();
 
   recognition.start();
@@ -2127,11 +2249,19 @@ function startRecognitionWatchdog() {
 
     var now = Date.now();
     var staleMs = now - Number(recognitionLastEventAt || 0);
+    var resultGapMs = now - Number(recognitionLastResultAt || 0);
+    var speechGapMs = now - Number(recognitionLastSpeechActivityAt || 0);
     var action = getRecognitionWatchdogAction(staleMs);
 
     // Si el motor deja de emitir eventos por demasiado tiempo, rehace la instancia completa.
     if (action === "hard-recovery") {
       forceRecognitionRecovery("watchdog-stale");
+      return;
+    }
+
+    // Si hay actividad de voz real sin resultados recientes, el motor quedo "sordo".
+    if (shouldRecoverFromSpeechActivity(resultGapMs, speechGapMs)) {
+      forceRecognitionRecovery("watchdog-audio-activity");
     }
   }, WATCHDOG_POLL_INTERVAL_MS);
 }
@@ -2234,6 +2364,8 @@ function stopListening() {
   listeningRequested = false;
   recognitionConsecutiveErrors = 0;
   recognitionLastEventAt = 0;
+  recognitionLastSpeechActivityAt = 0;
+  stopRecognitionActivityMonitor();
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
@@ -2258,12 +2390,14 @@ function stopListening() {
 }
 
 function clearOutputs() {
+  stopRecognitionActivityMonitor();
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
   recognitionRestartAttempts = 0;
   recognitionLastResultAt = 0;
   recognitionLastEventAt = 0;
+  recognitionLastSpeechActivityAt = 0;
   recognitionConsecutiveErrors = 0;
   recognitionLastRestartAt = 0;
   recognitionLastHardRecoveryAt = 0;
