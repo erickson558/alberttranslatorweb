@@ -43,6 +43,7 @@ const speakTranslationBtn = document.getElementById("speak-translation");
 const manualInput = document.getElementById("manual-input");
 const translateManualBtn = document.getElementById("translate-manual");
 const translationProviderSelect = document.getElementById("translation-provider");
+const transcriptionEngineSelect = document.getElementById("transcription-engine");
 const typingProfileSelect = document.getElementById("typing-profile");
 const typingSpeedDial = document.getElementById("typing-speed");
 const typingSpeedValue = document.getElementById("typing-speed-value");
@@ -65,6 +66,7 @@ const UI_PREFS_COOKIE = "albert_translator_ui_prefs";
 let recognition = null;
 let listening = false;
 let listeningRequested = false;
+let activeTranscriptionEngine = "";
 let translateDebounceTimer = null;
 let typedTranslateDebounceTimer = null;
 let livePreviewDelayTimer = null;
@@ -102,16 +104,64 @@ let recognitionActivityContext = null;
 let recognitionActivitySource = null;
 let recognitionActivityAnalyser = null;
 let recognitionActivityTimer = null;
+let localTranscriptionWorker = null;
+let localTranscriptionInitPending = null;
+let localTranscriptionReady = false;
+let localTranscriptionWorkerKey = "";
+let localTranscriptionWorkerDevice = "wasm";
+let localTranscriptionStream = null;
+let localTranscriptionContext = null;
+let localTranscriptionSource = null;
+let localTranscriptionProcessor = null;
+let localTranscriptionSink = null;
+let localTranscriptionBufferedChunks = [];
+let localTranscriptionBufferedSamples = 0;
+let localTranscriptionQueue = [];
+let localTranscriptionInFlight = false;
+let localTranscriptionSequence = 0;
+let localTranscriptionSessionId = 0;
+let localTranscriptionLastVoiceAt = 0;
+let localTranscriptionRecovering = false;
 let lastLiveEnqueueTextNorm = "";
 let lastLiveEnqueueAt = 0;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
 };
-const WATCHDOG_STALE_THRESHOLD_MS = 15000;
+const WATCHDOG_STALE_THRESHOLD_MS = 45000;
 const WATCHDOG_POLL_INTERVAL_MS = 3000;
 const WATCHDOG_ACTIVE_SPEECH_WINDOW_MS = 2200;
 const WATCHDOG_ACTIVE_SPEECH_RESULT_GAP_MS = 4200;
+const LOCAL_STT_WORKER_URL = new URL("./frontend/js/local-stt-worker.js", window.location.href);
+const LOCAL_STT_TARGET_SAMPLE_RATE = 16000;
+const LOCAL_STT_CHUNK_MS = 3200;
+const LOCAL_STT_MIN_CHUNK_MS = 1000;
+const LOCAL_STT_OVERLAP_MS = 700;
+const LOCAL_STT_SILENCE_FLUSH_MS = 650;
+const LOCAL_STT_MAX_BUFFER_MS = 6800;
+const LOCAL_STT_VOICE_RMS_THRESHOLD = 0.013;
+
+const WHISPER_LANGUAGE_HINTS = {
+  ar: "arabic",
+  de: "german",
+  el: "greek",
+  en: "english",
+  es: "spanish",
+  fr: "french",
+  he: "hebrew",
+  hi: "hindi",
+  it: "italian",
+  ja: "japanese",
+  ko: "korean",
+  nl: "dutch",
+  pl: "polish",
+  pt: "portuguese",
+  ru: "russian",
+  sv: "swedish",
+  tr: "turkish",
+  uk: "ukrainian",
+  zh: "chinese",
+};
 
 const LOCAL_GLOSSARY_EN_ES = {
   hello: "hola", hi: "hola", how: "cómo", are: "estás", you: "tú", today: "hoy", tomorrow: "mañana", yesterday: "ayer",
@@ -153,6 +203,8 @@ function initSpeechUnloadGuards() {
   window.addEventListener("pagehide", forceStopSpeech, false);
   window.addEventListener("beforeunload", stopRecognitionActivityMonitor, false);
   window.addEventListener("pagehide", stopRecognitionActivityMonitor, false);
+  window.addEventListener("beforeunload", cleanupLocalTranscriptionResources, false);
+  window.addEventListener("pagehide", cleanupLocalTranscriptionResources, false);
   window.addEventListener("beforeunload", persistUiPreferences, false);
   // Si la pestaña regresa a primer plano, intenta retomar la escucha caída.
   document.addEventListener("visibilitychange", function () {
@@ -160,6 +212,9 @@ function initSpeechUnloadGuards() {
       return;
     }
     if (!listeningRequested || listening) {
+      return;
+    }
+    if (activeTranscriptionEngine === "local-whisper") {
       return;
     }
     scheduleRecognitionRestart("visibility-resume", 180, true);
@@ -244,6 +299,9 @@ function wireEvents() {
   sourceSelect.addEventListener("change", function () {
     persistUiPreferences();
     resetLiveEnqueueState();
+    if (activeTranscriptionEngine === "local-whisper" && listeningRequested) {
+      showError("Reinicia la escucha para aplicar el nuevo idioma al motor Whisper local.");
+    }
     if (recognition && listening) {
       recognition.lang = resolveRecognitionLang(sourceSelect.value);
     }
@@ -319,6 +377,15 @@ function wireEvents() {
   if (liveTranslationFastToggle) {
     liveTranslationFastToggle.addEventListener("change", persistUiPreferences);
   }
+
+  if (transcriptionEngineSelect) {
+    transcriptionEngineSelect.addEventListener("change", function () {
+      persistUiPreferences();
+      if (listeningRequested) {
+        showError("El cambio de motor de transcripción se aplicará al reiniciar la escucha.");
+      }
+    });
+  }
 }
 
 function getSafeLocalStorage() {
@@ -336,6 +403,7 @@ function persistUiPreferences() {
     sourceLanguage: sourceSelect ? sourceSelect.value : "en",
     targetLanguage: targetSelect ? targetSelect.value : "es",
     provider: translationProviderSelect ? translationProviderSelect.value : "google-free",
+    transcriptionEngine: transcriptionEngineSelect ? transcriptionEngineSelect.value : "local-whisper",
     typingProfile: typingProfileSelect ? typingProfileSelect.value : "normal",
     typingSpeed: typingSpeedDial ? String(typingSpeedDial.value || "62") : "62",
     typingStagger: !!(typingStaggerToggle && typingStaggerToggle.checked),
@@ -399,6 +467,12 @@ function restoreUiPreferences() {
       translationProviderSelect.value = "google-free";
     }
   }
+  if (transcriptionEngineSelect && typeof prefs.transcriptionEngine === "string") {
+    transcriptionEngineSelect.value = prefs.transcriptionEngine;
+    if (!transcriptionEngineSelect.value) {
+      transcriptionEngineSelect.value = "local-whisper";
+    }
+  }
   if (typingProfileSelect && typeof prefs.typingProfile === "string") {
     typingProfileSelect.value = prefs.typingProfile;
   }
@@ -421,6 +495,9 @@ function restoreUiPreferences() {
 function applyDefaultUiPreferences() {
   if (translationProviderSelect) {
     translationProviderSelect.value = "google-free";
+  }
+  if (transcriptionEngineSelect) {
+    transcriptionEngineSelect.value = "local-whisper";
   }
 }
 
@@ -693,7 +770,45 @@ function resetRecognitionSessionState() {
   recognitionResultsLedger = [];
 }
 
+function markRecognitionEvent(hasSpeechActivity) {
+  recognitionLastEventAt = Date.now();
+  if (hasSpeechActivity) {
+    recognitionLastSpeechActivityAt = recognitionLastEventAt;
+  }
+}
+
+function clearRecognitionHandlers(instance) {
+  if (!instance) {
+    return;
+  }
+
+  var handlerNames = [
+    "onstart",
+    "onresult",
+    "onerror",
+    "onend",
+    "onaudiostart",
+    "onaudioend",
+    "onsoundstart",
+    "onsoundend",
+    "onspeechstart",
+    "onspeechend",
+    "onnomatch",
+  ];
+
+  for (var i = 0; i < handlerNames.length; i += 1) {
+    try {
+      instance[handlerNames[i]] = null;
+    } catch (_e) {
+      // Ignorado.
+    }
+  }
+}
+
 function getRecognitionWatchdogAction(staleMs) {
+  // Reserva la recuperacion dura para estancamientos largos sin ningun evento.
+  // Si hay voz real pero faltan resultados, la recuperacion rapida la decide
+  // shouldRecoverFromSpeechActivity().
   if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
     return "hard-recovery";
   }
@@ -1096,6 +1211,558 @@ function startRecognitionActivityMonitor() {
   }).catch(function () {
     // Best effort: si el monitor no puede abrir audio, la escucha sigue funcionando igual.
   });
+}
+
+function getSelectedTranscriptionEngine() {
+  var value = transcriptionEngineSelect ? String(transcriptionEngineSelect.value || "") : "local-whisper";
+  return value === "browser-speech" ? "browser-speech" : "local-whisper";
+}
+
+function isLocalTranscriptionPreferred() {
+  return getSelectedTranscriptionEngine() === "local-whisper";
+}
+
+function getPreferredLocalTranscriptionDevice() {
+  // Prioriza estabilidad. WebGPU puede iniciar pero fallar durante inferencia.
+  return "wasm";
+}
+
+function resolveLocalWhisperProfile(languageCode) {
+  var normalized = String(languageCode || "").trim().toLowerCase();
+  if (normalized === "en") {
+    return {
+      model: "Xenova/whisper-tiny.en",
+      language: "english",
+    };
+  }
+
+  return {
+    model: "Xenova/whisper-tiny",
+    language: WHISPER_LANGUAGE_HINTS[normalized] || null,
+  };
+}
+
+function resetLocalTranscriptionBuffers() {
+  localTranscriptionBufferedChunks = [];
+  localTranscriptionBufferedSamples = 0;
+  localTranscriptionLastVoiceAt = 0;
+}
+
+function concatFloat32Chunks(chunks, totalSamples) {
+  var expected = Math.max(0, Number(totalSamples || 0));
+  if (!chunks || !chunks.length || expected <= 0) {
+    return new Float32Array(0);
+  }
+
+  var output = new Float32Array(expected);
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i += 1) {
+    var chunk = chunks[i];
+    if (!chunk || !chunk.length) {
+      continue;
+    }
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  if (offset === expected) {
+    return output;
+  }
+  return output.slice(0, offset);
+}
+
+function downsampleAudioBuffer(input, inputSampleRate, outputSampleRate) {
+  if (!input || !input.length) {
+    return new Float32Array(0);
+  }
+
+  var sourceRate = Math.max(1, Number(inputSampleRate || outputSampleRate || 16000));
+  var targetRate = Math.max(1, Number(outputSampleRate || sourceRate));
+  if (sourceRate === targetRate) {
+    return new Float32Array(input);
+  }
+
+  var ratio = sourceRate / targetRate;
+  var outputLength = Math.max(1, Math.round(input.length / ratio));
+  var output = new Float32Array(outputLength);
+
+  var offset = 0;
+  for (var i = 0; i < outputLength; i += 1) {
+    var nextOffset = Math.min(input.length, Math.round((i + 1) * ratio));
+    var sum = 0;
+    var count = 0;
+    while (offset < nextOffset && offset < input.length) {
+      sum += input[offset];
+      count += 1;
+      offset += 1;
+    }
+    output[i] = count ? (sum / count) : 0;
+  }
+
+  return output;
+}
+
+function computeFloat32Rms(buffer) {
+  if (!buffer || !buffer.length) {
+    return 0;
+  }
+
+  var energy = 0;
+  for (var i = 0; i < buffer.length; i += 1) {
+    energy += buffer[i] * buffer[i];
+  }
+  return Math.sqrt(energy / buffer.length);
+}
+
+function invalidateLocalTranscriptionSession() {
+  localTranscriptionSessionId += 1;
+  localTranscriptionQueue = [];
+  localTranscriptionInFlight = false;
+  resetLocalTranscriptionBuffers();
+}
+
+function cleanupLocalTranscriptionAudio() {
+  if (localTranscriptionProcessor) {
+    try {
+      localTranscriptionProcessor.disconnect();
+    } catch (_eProcessorDisconnect) {
+      // Ignorado.
+    }
+    localTranscriptionProcessor.onaudioprocess = null;
+    localTranscriptionProcessor = null;
+  }
+
+  if (localTranscriptionSource) {
+    try {
+      localTranscriptionSource.disconnect();
+    } catch (_eSourceDisconnect) {
+      // Ignorado.
+    }
+    localTranscriptionSource = null;
+  }
+
+  if (localTranscriptionSink) {
+    try {
+      localTranscriptionSink.disconnect();
+    } catch (_eSinkDisconnect) {
+      // Ignorado.
+    }
+    localTranscriptionSink = null;
+  }
+
+  if (localTranscriptionStream) {
+    try {
+      var tracks = localTranscriptionStream.getTracks ? localTranscriptionStream.getTracks() : [];
+      for (var i = 0; i < tracks.length; i += 1) {
+        tracks[i].stop();
+      }
+    } catch (_eStreamStop) {
+      // Ignorado.
+    }
+    localTranscriptionStream = null;
+  }
+
+  if (localTranscriptionContext) {
+    try {
+      if (typeof localTranscriptionContext.close === "function") {
+        localTranscriptionContext.close();
+      }
+    } catch (_eContextClose) {
+      // Ignorado.
+    }
+    localTranscriptionContext = null;
+  }
+}
+
+function cleanupLocalTranscriptionResources() {
+  cleanupLocalTranscriptionAudio();
+  resetLocalTranscriptionBuffers();
+}
+
+function createLocalTranscriptionWorker() {
+  if (localTranscriptionWorker) {
+    return localTranscriptionWorker;
+  }
+
+  localTranscriptionWorker = new Worker(LOCAL_STT_WORKER_URL, { type: "module" });
+  localTranscriptionWorker.onmessage = handleLocalTranscriptionWorkerMessage;
+  localTranscriptionWorker.onerror = function () {
+    localTranscriptionReady = false;
+    localTranscriptionWorkerKey = "";
+    if (localTranscriptionInitPending) {
+      localTranscriptionInitPending.reject(new Error("No se pudo arrancar Whisper local en el navegador."));
+      localTranscriptionInitPending = null;
+    }
+  };
+
+  return localTranscriptionWorker;
+}
+
+function handleLocalTranscriptionWorkerMessage(event) {
+  var payload = event && event.data ? event.data : {};
+  var type = String(payload.type || "");
+
+  if (type === "ready") {
+    localTranscriptionReady = true;
+    localTranscriptionWorkerKey = String(payload.key || localTranscriptionWorkerKey || "");
+    localTranscriptionWorkerDevice = String(payload.device || "wasm");
+    if (localTranscriptionInitPending && localTranscriptionInitPending.key === localTranscriptionWorkerKey) {
+      localTranscriptionInitPending.resolve(payload);
+      localTranscriptionInitPending = null;
+    }
+    drainLocalTranscriptionQueue();
+    return;
+  }
+
+  if (type === "error") {
+    if (payload.scope === "init" && localTranscriptionInitPending) {
+      localTranscriptionReady = false;
+      localTranscriptionWorkerKey = "";
+      localTranscriptionInitPending.reject(new Error(String(payload.message || "No se pudo cargar Whisper local.")));
+      localTranscriptionInitPending = null;
+      return;
+    }
+
+    localTranscriptionInFlight = false;
+    if (payload.scope === "transcribe") {
+      handleLocalTranscriptionChunkError(payload);
+      return;
+    }
+    drainLocalTranscriptionQueue();
+    return;
+  }
+
+  if (type === "result") {
+    localTranscriptionInFlight = false;
+    handleLocalTranscriptionResult(payload);
+    drainLocalTranscriptionQueue();
+  }
+}
+
+function handleLocalTranscriptionChunkError(payload) {
+  var message = String((payload && payload.message) || "").trim();
+  var retriable = !localTranscriptionRecovering
+    && localTranscriptionWorkerDevice !== "wasm"
+    && /webgpu|gpu|adapter|device|backend/i.test(message);
+
+  if (retriable) {
+    localTranscriptionRecovering = true;
+    localTranscriptionReady = false;
+    localTranscriptionWorkerKey = "";
+    showError("Whisper local tuvo un fallo con GPU. Reintentando en modo estable...");
+    ensureLocalTranscriptionWorkerReady(true)
+      .catch(function () {
+        showError("Whisper local falló al recuperarse en modo estable.");
+      })
+      .finally(function () {
+        localTranscriptionRecovering = false;
+        drainLocalTranscriptionQueue();
+      });
+    return;
+  }
+
+  showError(
+    "Whisper local no pudo procesar un fragmento de audio."
+    + (message ? (" " + message) : "")
+  );
+  drainLocalTranscriptionQueue();
+}
+
+function handleLocalTranscriptionResult(payload) {
+  if (!payload) {
+    return;
+  }
+
+  var sessionId = Number(payload.sessionId || 0);
+  if (sessionId !== Number(localTranscriptionSessionId || 0)) {
+    return;
+  }
+
+  var text = normalizeQuestionPunctuation(String(payload.text || "").trim(), sourceSelect.value);
+  if (!text) {
+    return;
+  }
+
+  showError("");
+  var changed = appendTranscriptChunk(text);
+  if (!changed) {
+    return;
+  }
+
+  var transcriptNow = getTranscriptFieldText();
+  if (transcriptNow) {
+    maybeEnqueueLiveTranslation(transcriptNow, true);
+  }
+}
+
+function ensureLocalTranscriptionWorkerReady(forceWasm) {
+  var profile = resolveLocalWhisperProfile(sourceSelect.value);
+  var preferredDevice = forceWasm ? "wasm" : getPreferredLocalTranscriptionDevice();
+  var expectedKey = profile.model + "|" + preferredDevice;
+
+  if (
+    localTranscriptionReady
+    && localTranscriptionWorkerKey
+    && localTranscriptionWorkerKey.indexOf(profile.model + "|") === 0
+  ) {
+    return Promise.resolve({
+      key: localTranscriptionWorkerKey,
+      device: localTranscriptionWorkerDevice,
+      profile: profile,
+    });
+  }
+
+  if (localTranscriptionInitPending && localTranscriptionInitPending.key === expectedKey) {
+    return localTranscriptionInitPending.promise;
+  }
+
+  createLocalTranscriptionWorker();
+  setStatus("processing", "Cargando Whisper local...");
+
+  localTranscriptionInitPending = {};
+  localTranscriptionInitPending.key = expectedKey;
+  localTranscriptionInitPending.promise = new Promise(function (resolve, reject) {
+    localTranscriptionInitPending.resolve = resolve;
+    localTranscriptionInitPending.reject = reject;
+  });
+
+  localTranscriptionWorker.postMessage({
+    type: "init",
+    model: profile.model,
+    device: preferredDevice,
+    key: expectedKey,
+  });
+
+  return localTranscriptionInitPending.promise.then(function (payload) {
+    return {
+      key: expectedKey,
+      device: payload && payload.device ? payload.device : preferredDevice,
+      profile: profile,
+    };
+  });
+}
+
+function queueLocalTranscriptionAudio(samples) {
+  if (!samples || !samples.length) {
+    return;
+  }
+
+  localTranscriptionQueue.push({
+    id: ++localTranscriptionSequence,
+    sessionId: localTranscriptionSessionId,
+    sourceLanguage: sourceSelect ? sourceSelect.value : "auto",
+    audioBuffer: samples.buffer,
+  });
+
+  drainLocalTranscriptionQueue();
+}
+
+function drainLocalTranscriptionQueue() {
+  if (!localTranscriptionReady || localTranscriptionInFlight || !localTranscriptionWorker || !localTranscriptionQueue.length) {
+    return;
+  }
+
+  var next = localTranscriptionQueue.shift();
+  if (!next) {
+    return;
+  }
+
+  localTranscriptionInFlight = true;
+  localTranscriptionWorker.postMessage({
+    type: "transcribe",
+    id: next.id,
+    sessionId: next.sessionId,
+    sourceLanguage: next.sourceLanguage,
+    audioBuffer: next.audioBuffer,
+  }, [next.audioBuffer]);
+}
+
+function flushLocalTranscriptionBuffer(forceShortChunk) {
+  var standardTargetSamples = Math.floor((LOCAL_STT_CHUNK_MS / 1000) * LOCAL_STT_TARGET_SAMPLE_RATE);
+  var minimumSamples = Math.floor((LOCAL_STT_MIN_CHUNK_MS / 1000) * LOCAL_STT_TARGET_SAMPLE_RATE);
+  var maxBufferedSamples = Math.floor((LOCAL_STT_MAX_BUFFER_MS / 1000) * LOCAL_STT_TARGET_SAMPLE_RATE);
+  if (localTranscriptionBufferedSamples < minimumSamples) {
+    return false;
+  }
+  if (!forceShortChunk && localTranscriptionBufferedSamples < standardTargetSamples && localTranscriptionBufferedSamples < maxBufferedSamples) {
+    return false;
+  }
+
+  var combined = concatFloat32Chunks(localTranscriptionBufferedChunks, localTranscriptionBufferedSamples);
+  if (!combined.length) {
+    resetLocalTranscriptionBuffers();
+    return false;
+  }
+
+  var overlapSamples = Math.floor((LOCAL_STT_OVERLAP_MS / 1000) * LOCAL_STT_TARGET_SAMPLE_RATE);
+  var preservedOverlap = Math.min(overlapSamples, combined.length);
+  var nextSeed = preservedOverlap ? combined.slice(combined.length - preservedOverlap) : new Float32Array(0);
+
+  localTranscriptionBufferedChunks = preservedOverlap ? [nextSeed] : [];
+  localTranscriptionBufferedSamples = preservedOverlap;
+  queueLocalTranscriptionAudio(combined);
+  transcriptOutput.classList.remove("streaming");
+  return true;
+}
+
+function handleLocalTranscriptionAudioProcess(event, sessionId) {
+  if (
+    !listeningRequested
+    || activeTranscriptionEngine !== "local-whisper"
+    || sessionId !== Number(localTranscriptionSessionId || 0)
+    || !localTranscriptionContext
+  ) {
+    return;
+  }
+
+  var inputBuffer = event && event.inputBuffer ? event.inputBuffer.getChannelData(0) : null;
+  if (!inputBuffer || !inputBuffer.length) {
+    return;
+  }
+
+  var downsampled = downsampleAudioBuffer(inputBuffer, localTranscriptionContext.sampleRate, LOCAL_STT_TARGET_SAMPLE_RATE);
+  if (!downsampled.length) {
+    return;
+  }
+
+  localTranscriptionBufferedChunks.push(downsampled);
+  localTranscriptionBufferedSamples += downsampled.length;
+
+  var rms = computeFloat32Rms(downsampled);
+  if (rms >= LOCAL_STT_VOICE_RMS_THRESHOLD) {
+    localTranscriptionLastVoiceAt = Date.now();
+    transcriptOutput.classList.add("streaming");
+  }
+
+  if (flushLocalTranscriptionBuffer(false)) {
+    return;
+  }
+
+  if (
+    localTranscriptionLastVoiceAt
+    && (Date.now() - localTranscriptionLastVoiceAt) >= LOCAL_STT_SILENCE_FLUSH_MS
+  ) {
+    flushLocalTranscriptionBuffer(true);
+  }
+}
+
+function startLocalAudioCapture(sessionId) {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    return Promise.reject(new Error("Tu navegador no soporta captura de audio para Whisper local."));
+  }
+
+  var AudioContextCtor = window.AudioContext || window.webkitAudioContext || null;
+  if (!AudioContextCtor) {
+    return Promise.reject(new Error("Tu navegador no soporta Web Audio para Whisper local."));
+  }
+
+  cleanupLocalTranscriptionAudio();
+  resetLocalTranscriptionBuffers();
+
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  }).then(function (stream) {
+    if (!listeningRequested || sessionId !== Number(localTranscriptionSessionId || 0)) {
+      var unusedTracks = stream.getTracks ? stream.getTracks() : [];
+      for (var i = 0; i < unusedTracks.length; i += 1) {
+        unusedTracks[i].stop();
+      }
+      throw new Error("Inicio de captura cancelado.");
+    }
+
+    localTranscriptionStream = stream;
+    localTranscriptionContext = new AudioContextCtor();
+    if (localTranscriptionContext.state === "suspended" && typeof localTranscriptionContext.resume === "function") {
+      return localTranscriptionContext.resume().then(function () {
+        return stream;
+      });
+    }
+    return stream;
+  }).then(function (stream) {
+    localTranscriptionSource = localTranscriptionContext.createMediaStreamSource(stream);
+    localTranscriptionProcessor = localTranscriptionContext.createScriptProcessor(4096, 1, 1);
+    localTranscriptionSink = localTranscriptionContext.createGain();
+    localTranscriptionSink.gain.value = 0;
+
+    localTranscriptionProcessor.onaudioprocess = function (audioEvent) {
+      handleLocalTranscriptionAudioProcess(audioEvent, sessionId);
+    };
+
+    localTranscriptionSource.connect(localTranscriptionProcessor);
+    localTranscriptionProcessor.connect(localTranscriptionSink);
+    localTranscriptionSink.connect(localTranscriptionContext.destination);
+  });
+}
+
+async function startLocalListening() {
+  if (listening) {
+    return;
+  }
+
+  listeningRequested = true;
+  activeTranscriptionEngine = "local-whisper";
+  localTranscriptionSessionId += 1;
+  var sessionId = localTranscriptionSessionId;
+
+  stopRecognitionActivityMonitor();
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  showError("");
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  setStatus("processing", "Preparando Whisper local...");
+
+  try {
+    await ensureLocalTranscriptionWorkerReady();
+    if (!listeningRequested || sessionId !== Number(localTranscriptionSessionId || 0)) {
+      return;
+    }
+
+    await startLocalAudioCapture(sessionId);
+    if (!listeningRequested || sessionId !== Number(localTranscriptionSessionId || 0)) {
+      cleanupLocalTranscriptionAudio();
+      return;
+    }
+
+    listening = true;
+    setStatus("listening", "Escuchando con Whisper local");
+    showError("");
+  } catch (error) {
+    cleanupLocalTranscriptionAudio();
+    if (!listeningRequested || (error && error.message === "Inicio de captura cancelado.")) {
+      activeTranscriptionEngine = "";
+      listening = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus("idle", "Inactivo");
+      return;
+    }
+    listeningRequested = false;
+    activeTranscriptionEngine = "";
+    listening = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus("error", "Error");
+    showError(String(error && error.message ? error.message : "No se pudo iniciar Whisper local."));
+  }
+}
+
+function stopLocalListening() {
+  listeningRequested = false;
+  flushLocalTranscriptionBuffer(true);
+  cleanupLocalTranscriptionAudio();
+  resetLiveEnqueueState();
+  transcriptOutput.classList.remove("streaming");
+  listening = false;
+  activeTranscriptionEngine = "";
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  setStatus("idle", "Inactivo");
 }
 
 function clearInterimCommitTimer() {
@@ -1809,6 +2476,80 @@ function buildRecognitionSnapshot(results, resultIndex) {
   };
 }
 
+function promoteTranscriptChunkToHistory(chunkText) {
+  var normalizedChunk = String(chunkText || "").trim();
+  if (!normalizedChunk) {
+    return false;
+  }
+
+  var merged = mergeTranscriptBlockIntoText(transcriptHistoryText, normalizedChunk);
+  if (!merged.changed) {
+    return false;
+  }
+
+  transcriptHistoryText = merged.text;
+  return true;
+}
+
+function promoteRecognitionFinalTextToHistory() {
+  var changed = promoteTranscriptChunkToHistory(recognitionSessionFinalText);
+  recognitionSessionFinalText = "";
+  return changed;
+}
+
+function shouldPreserveDroppedRecognitionInterim(previousInterim, nextFinalText, nextInterimText) {
+  var previous = normalizeQuestionPunctuation(String(previousInterim || "").trim(), sourceSelect.value);
+  if (!previous) {
+    return false;
+  }
+
+  if (!/[a-z0-9áéíóúñü]/i.test(previous)) {
+    return false;
+  }
+
+  if (countWords(previous) < 3 && previous.length < 16) {
+    return false;
+  }
+
+  var nextCombined = joinTranscriptBlocks([nextFinalText, nextInterimText])
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!nextCombined) {
+    return true;
+  }
+
+  if (
+    speechTokensMatch(previous, nextCombined)
+    || isSpeechTokenPrefix(previous, nextCombined)
+    || isSpeechTokenSuffix(previous, nextCombined)
+    || isSpeechTokenPrefix(nextCombined, previous)
+    || isSpeechTokenSuffix(nextCombined, previous)
+  ) {
+    return false;
+  }
+
+  var overlapWordCount = findSpeechOverlapWordCount(previous, nextCombined);
+  if (isReliableSpeechOverlap(previous, nextCombined, overlapWordCount)) {
+    return false;
+  }
+
+  var reverseOverlapWordCount = findSpeechOverlapWordCount(nextCombined, previous);
+  if (isReliableSpeechOverlap(nextCombined, previous, reverseOverlapWordCount)) {
+    return false;
+  }
+
+  return true;
+}
+
+function preserveDroppedRecognitionInterim(previousInterim, nextFinalText, nextInterimText) {
+  if (!shouldPreserveDroppedRecognitionInterim(previousInterim, nextFinalText, nextInterimText)) {
+    return false;
+  }
+
+  return promoteTranscriptChunkToHistory(previousInterim);
+}
+
 function commitRecognitionSession(includeInterim, reason) {
   var mergedHistory = transcriptHistoryText;
 
@@ -2062,8 +2803,9 @@ function bindRecognitionHandlers() {
     recognitionRestartAttempts = 0;
     recognitionConsecutiveErrors = 0;
     resetRecognitionSessionState();
+    recognitionLastSpeechActivityAt = 0;
     recognitionLastResultAt = Date.now();
-    recognitionLastEventAt = Date.now();
+    markRecognitionEvent(false);
     recognitionLastRestartAt = Date.now();
     startRecognitionWatchdog();
     listening = true;
@@ -2074,7 +2816,7 @@ function bindRecognitionHandlers() {
   };
 
   recognition.onerror = function (event) {
-    recognitionLastEventAt = Date.now();
+    markRecognitionEvent(false);
     var code = String(event && event.error ? event.error : "desconocido");
 
     if (code === "aborted") {
@@ -2116,7 +2858,7 @@ function bindRecognitionHandlers() {
   };
 
   recognition.onend = function () {
-    recognitionLastEventAt = Date.now();
+    markRecognitionEvent(false);
     clearInterimCommitTimer();
     if (livePreviewDelayTimer) {
       clearTimeout(livePreviewDelayTimer);
@@ -2142,18 +2884,22 @@ function bindRecognitionHandlers() {
   };
 
   recognition.onresult = function (event) {
-    recognitionLastEventAt = Date.now();
+    markRecognitionEvent(false);
     showError("");
     // Mantiene un ledger por indice para no perder bloques previos si el navegador
     // solo actualiza la cola cambiada o reescribe una parte de la sesion.
+    var previousInterim = String(recognitionSessionInterimText || lastInterimChunk || "").trim();
     var snapshot = buildRecognitionSnapshot(event.results, event.resultIndex);
+    var hadFinalText = String(snapshot.finalText || "").trim().length > 0;
+    preserveDroppedRecognitionInterim(previousInterim, snapshot.finalText, snapshot.interimText);
     recognitionSessionFinalText = snapshot.finalText;
     recognitionSessionInterimText = snapshot.interimText;
     lastInterimChunk = recognitionSessionInterimText;
+    promoteRecognitionFinalTextToHistory();
 
     renderTranscriptFromModel();
 
-    if (recognitionSessionFinalText) {
+    if (hadFinalText) {
       recognitionLastResultAt = Date.now();
       if (livePreviewDelayTimer) {
         clearTimeout(livePreviewDelayTimer);
@@ -2177,6 +2923,36 @@ function bindRecognitionHandlers() {
     lastInterimTranslateAt = Date.now();
     recognitionLastResultAt = Date.now();
   };
+
+  recognition.onaudiostart = function () {
+    markRecognitionEvent(false);
+    showError("");
+  };
+
+  recognition.onaudioend = function () {
+    markRecognitionEvent(false);
+  };
+
+  recognition.onsoundstart = function () {
+    markRecognitionEvent(true);
+  };
+
+  recognition.onsoundend = function () {
+    markRecognitionEvent(false);
+  };
+
+  recognition.onspeechstart = function () {
+    markRecognitionEvent(true);
+    showError("");
+  };
+
+  recognition.onspeechend = function () {
+    markRecognitionEvent(false);
+  };
+
+  recognition.onnomatch = function () {
+    markRecognitionEvent(true);
+  };
 }
 
 function prepareRecognitionInstance() {
@@ -2186,6 +2962,11 @@ function prepareRecognitionInstance() {
 
 function startListening() {
   showError("");
+  if (isLocalTranscriptionPreferred()) {
+    startLocalListening();
+    return;
+  }
+
   if (!SpeechRecognitionCtor) {
     showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
     return;
@@ -2196,6 +2977,7 @@ function startListening() {
   }
 
   listeningRequested = true;
+  activeTranscriptionEngine = "browser-speech";
   recognitionLastSpeechActivityAt = 0;
   recognitionLastEventAt = Date.now();
   startRecognitionActivityMonitor();
@@ -2209,14 +2991,7 @@ function initializeRecognitionInstance() {
     return;
   }
   if (recognition) {
-    try {
-      recognition.onstart = null;
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-    } catch (_e) {
-      // Ignorado.
-    }
+    clearRecognitionHandlers(recognition);
   }
 
   recognition = new SpeechRecognitionCtor();
@@ -2284,10 +3059,7 @@ function forceRecognitionRecovery(reason) {
 
   try {
     if (recognition) {
-      recognition.onstart = null;
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
+      clearRecognitionHandlers(recognition);
       if (typeof recognition.abort === "function") {
         recognition.abort();
       } else {
@@ -2361,6 +3133,11 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
 }
 
 function stopListening() {
+  if (activeTranscriptionEngine === "local-whisper") {
+    stopLocalListening();
+    return;
+  }
+
   listeningRequested = false;
   recognitionConsecutiveErrors = 0;
   recognitionLastEventAt = 0;
@@ -2387,9 +3164,19 @@ function stopListening() {
       // Ignorado.
     }
   }
+  activeTranscriptionEngine = "";
 }
 
 function clearOutputs() {
+  if (activeTranscriptionEngine === "local-whisper" || localTranscriptionStream || localTranscriptionQueue.length) {
+    cleanupLocalTranscriptionResources();
+    invalidateLocalTranscriptionSession();
+    activeTranscriptionEngine = "";
+    listeningRequested = false;
+    listening = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
   stopRecognitionActivityMonitor();
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
@@ -2459,6 +3246,9 @@ function swapLanguages() {
   sourceSelect.value = targetSelect.value;
   targetSelect.value = source;
 
+  if (activeTranscriptionEngine === "local-whisper" && listeningRequested) {
+    showError("Reinicia la escucha para aplicar el cambio de idioma al motor Whisper local.");
+  }
   if (recognition && listening) {
     recognition.lang = resolveRecognitionLang(sourceSelect.value);
   }

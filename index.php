@@ -39,6 +39,14 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
           <option value="mymemory-free">MyMemory Free</option>
         </select>
       </div>
+
+      <div class="lang-field">
+        <label for="transcription-engine">Motor de transcripción</label>
+        <select id="transcription-engine">
+          <option value="local-whisper" selected>Whisper local gratis</option>
+          <option value="browser-speech">Web Speech del navegador</option>
+        </select>
+      </div>
     </section>
 
     <section class="controls">
@@ -110,6 +118,7 @@ $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
 
     <footer class="app-footer">
       <small>API PHP: <code>/api/health.php</code> y <code>/api/translate-text.php</code>.</small>
+      <small>Whisper local: la primera carga descarga y cachea el modelo en el navegador.</small>
     </footer>
   </main>
 

@@ -16,6 +16,13 @@ function initializeRecognitionInstance() {
     onerror: null,
     onend: null,
     onresult: null,
+    onaudiostart: null,
+    onaudioend: null,
+    onsoundstart: null,
+    onsoundend: null,
+    onspeechstart: null,
+    onspeechend: null,
+    onnomatch: null,
   };
 
   recognition.continuous = true;
@@ -33,6 +40,13 @@ function bindRecognitionHandlers() {
   recognition.onerror = function () {};
   recognition.onend = function () {};
   recognition.onresult = function () {};
+  recognition.onaudiostart = function () {};
+  recognition.onaudioend = function () {};
+  recognition.onsoundstart = function () {};
+  recognition.onsoundend = function () {};
+  recognition.onspeechstart = function () {};
+  recognition.onspeechend = function () {};
+  recognition.onnomatch = function () {};
 }
 
 function prepareRecognitionInstance() {
@@ -47,6 +61,13 @@ function hasBoundHandlers(instance) {
     && typeof instance.onerror === "function"
     && typeof instance.onend === "function"
     && typeof instance.onresult === "function"
+    && typeof instance.onaudiostart === "function"
+    && typeof instance.onaudioend === "function"
+    && typeof instance.onsoundstart === "function"
+    && typeof instance.onsoundend === "function"
+    && typeof instance.onspeechstart === "function"
+    && typeof instance.onspeechend === "function"
+    && typeof instance.onnomatch === "function"
   );
 }
 

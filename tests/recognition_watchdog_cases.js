@@ -1,11 +1,10 @@
 /*
   Regresion de politica del watchdog de reconocimiento.
-  Silencio normal: no reinicia escucha.
-  Interim pendiente: no debe comprometer la sesion por silencio.
-  Motor estancado: fuerza recuperacion.
+  Silencio normal o pausas largas: no reinicia escucha.
+  Motor estancado durante demasiado tiempo: fuerza recuperacion.
 */
 
-const WATCHDOG_STALE_THRESHOLD_MS = 15000;
+const WATCHDOG_STALE_THRESHOLD_MS = 45000;
 
 function getRecognitionWatchdogAction(staleMs) {
   if (staleMs >= WATCHDOG_STALE_THRESHOLD_MS) {
@@ -15,12 +14,12 @@ function getRecognitionWatchdogAction(staleMs) {
 }
 
 const cases = [
-  { idleMs: 4000, staleMs: 4000, hasPendingInterim: false, expected: "none" },
-  { idleMs: 12000, staleMs: 12000, hasPendingInterim: false, expected: "none" },
-  { idleMs: 12000, staleMs: 12000, hasPendingInterim: true, expected: "none" },
-  { idleMs: 14000, staleMs: 14000, hasPendingInterim: false, expected: "none" },
-  { idleMs: 15000, staleMs: 15000, hasPendingInterim: false, expected: "hard-recovery" },
-  { idleMs: 17000, staleMs: 17000, hasPendingInterim: true, expected: "hard-recovery" },
+  { staleMs: 4000, expected: "none" },
+  { staleMs: 15000, expected: "none" },
+  { staleMs: 30000, expected: "none" },
+  { staleMs: 44999, expected: "none" },
+  { staleMs: 45000, expected: "hard-recovery" },
+  { staleMs: 60000, expected: "hard-recovery" },
 ];
 
 let failed = false;
@@ -37,4 +36,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log("[OK] recognition watchdog policy cases");
+console.log("[OK] recognition watchdog fallback cases");

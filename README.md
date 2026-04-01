@@ -1,11 +1,12 @@
 # AlbertTranslator PHP
 
-Version `V1.5.25` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version `V1.6.1` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
 
 ## Que hace
 
 - Modo oscuro futurista por defecto.
-- Captura voz con Web Speech API en el navegador.
+- Captura voz gratis con Whisper local en el navegador mediante `Transformers.js`.
+- Fallback al motor `Web Speech API` del navegador cuando se necesite compatibilidad.
 - Traduccion fluida y seguimiento automatico al final del texto.
 - Lectura por voz (bocina) para transcripcion y traduccion.
 - Traduccion manual de texto sin microfono.
@@ -21,17 +22,22 @@ Version `V1.5.25` para EasyPHP, sin dependencias de Python y con arquitectura se
 - Traduccion en vivo alineada con el contenido actual visible del cuadro de transcripcion.
 - Preview local solo cuando la calidad minima es segura; la traduccion en vivo prioriza exactitud sobre pseudo-traducciones.
 - Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
+- Primera carga del motor local con descarga y cacheo del modelo ONNX en el navegador.
+- Whisper local configurado para usar el backend `WASM` estable por defecto, evitando fallos intermitentes de inferencia con `WebGPU`.
 - Fusion inteligente de bloques `interim/final` para reducir repeticion de palabras y frases en la transcripcion.
 - Deduplicacion de cola reciente de transcripcion para bloques finales que reagrupan varias frases ya confirmadas.
 - Typewriter restaurado en transcripcion sin usar el textarea animado como fuente de verdad para traduccion/copia/exportacion.
 - Reconstruccion de la sesion de voz desde `SpeechRecognitionResultList` completa para reducir perdida de transcripcion en vivo.
 - Ledger de resultados por indice para conservar bloques previos aunque Web Speech solo reescriba la cola cambiada.
-- Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos.
-- Politica de watchdog ajustada para no reconectar por silencios normales y limpiar errores transitorios al recuperar escucha.
+- Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos o deja de devolver resultados.
+- Politica de watchdog ajustada para no reconectar por silencios normales y reservar la recuperacion dura para estancamientos prolongados.
 - La pausa breve ya no compromete ni parte la sesion de voz; solo fuerza refresco de traduccion y reserva el guardado para fallos reales, `stop` y `onend`.
 - Menor perdida de palabras y frases cortas durante streaming al priorizar la mejor alternativa de reconocimiento y guardar el ultimo interim antes de una recuperacion real.
-- Recuperacion dura mas temprana cuando el motor pasa demasiado tiempo sin emitir eventos, para reducir huecos largos de audio perdido.
-- Wiring de handlers de `SpeechRecognition` restaurado para que las instancias recreadas por reconexion sigan capturando resultados y errores.
+- Promocion inmediata de bloques `final` al historial para que no se pierdan si `Web Speech` recicla la lista de resultados dentro de la misma sesion.
+- Preservacion del `interim` anterior cuando el motor lo reemplaza por otro texto sin solapamiento claro, reduciendo huecos en conversaciones largas.
+- Whisper local por chunks cortos con solape para reducir cortes de frases largas sin depender del motor remoto del navegador.
+- Modelos oficiales `Xenova/whisper-tiny(.en)` para maximizar compatibilidad con `Transformers.js`.
+- Wiring de handlers de `SpeechRecognition` ampliado para que las instancias recreadas por reconexion sigan capturando resultados, errores y senales bajas de audio/voz.
 - Commit y render de bloques multi-frase por linea para no colapsar frases distintas cuando el motor devuelve varios resultados en un mismo evento.
 - Monitor opcional de actividad real del microfono para recuperar antes la escucha cuando entra voz pero `Web Speech` no devuelve resultados.
 - Traduccion manual en tiempo real basada en escritura del textfield de origen.
@@ -43,15 +49,18 @@ Version `V1.5.25` para EasyPHP, sin dependencias de Python y con arquitectura se
 
 - `index.php`: entrypoint web y wiring de assets.
 - `frontend/css/style.css`: UI/UX y tema oscuro.
-- `frontend/js/app.js`: captura voz, UX fluida, lectura por voz.
+- `frontend/js/app.js`: captura voz, Whisper local, UX fluida, lectura por voz.
+- `frontend/js/local-stt-worker.js`: worker del motor Whisper local con `Transformers.js`.
 - `api/health.php`: estado de la API.
 - `api/translate-text.php`: endpoint de traduccion.
 - `backend/config.php`: constantes globales y version.
 - `backend/http.php`: helpers HTTP/JSON.
 - `backend/translator_service.php`: logica de traduccion.
 - `tests/translation_smoke.php`: prueba de humo de traduccion.
+- `tests/local_whisper_helpers_cases.js`: regresion de seleccion de perfil Whisper y downsampling basico.
 - `tests/transcript_merge_cases.js`: regresion de fusion/deduplicacion de transcripcion.
-- `tests/recognition_watchdog_cases.js`: regresion de politica del watchdog de reconocimiento.
+- `tests/recognition_watchdog_cases.js`: regresion del fallback del watchdog de reconocimiento.
+- `tests/recognition_live_commit_cases.js`: regresion de consolidacion temprana de bloques `final` y preservacion de `interim` perdido.
 - `tests/recognition_recovery_commit_cases.js`: regresion de guardado del ultimo texto antes de reiniciar una sesion de voz rota.
 - `tests/recognition_result_ledger_cases.js`: regresion del ledger por indice para no perder bloques previos entre eventos.
 - `tests/recognition_handler_binding_cases.js`: regresion de wiring para reconexiones y recreacion de la instancia de voz.
@@ -61,7 +70,8 @@ Version `V1.5.25` para EasyPHP, sin dependencias de Python y con arquitectura se
 ## Requisitos
 
 - EasyPHP / Apache con PHP 5.4+.
-- Navegador Chromium/Chrome/Edge para reconocimiento y lectura de voz.
+- Navegador Chromium/Chrome/Edge moderno para Whisper local y lectura de voz.
+- Internet en la primera carga para descargar y cachear el modelo del Hub de Hugging Face.
 - Opcional: extension `curl` en PHP para mayor compatibilidad de traduccion.
 
 ## Uso
@@ -69,7 +79,9 @@ Version `V1.5.25` para EasyPHP, sin dependencias de Python y con arquitectura se
 1. Abre `http://localhost:888/monitoreos/AlbertTranslator/`.
 2. Permite acceso al microfono.
 3. Por defecto: origen `en` (Ingles), destino `es` (Espanol).
-4. Pulsa `Iniciar escucha` para transcribir y traducir.
+4. Deja `Whisper local gratis` como motor de transcripcion recomendado.
+5. Pulsa `Iniciar escucha` para transcribir y traducir.
+6. La primera vez el navegador descargara y cacheara el modelo local; despues el arranque sera mucho mas rapido.
 
 ## API
 
@@ -89,8 +101,10 @@ Ejemplo JSON para traduccion:
 ## Validacion basica
 
 - Ejecuta `C:\Program Files (x86)\EasyPHP-Webserver-14.1b2\binaries\php\php.exe tests\translation_smoke.php` para una prueba rapida de traduccion.
+- Ejecuta `node tests\local_whisper_helpers_cases.js` para validar seleccion de perfil Whisper y downsampling de audio.
 - Ejecuta `node tests\transcript_merge_cases.js` para validar deduplicacion de bloques de transcripcion.
-- Ejecuta `node tests\recognition_watchdog_cases.js` para validar que el watchdog no reinicie ni comprometa la sesion por silencio normal.
+- Ejecuta `node tests\recognition_watchdog_cases.js` para validar que el watchdog reserve la recuperacion dura para estancamientos prolongados.
+- Ejecuta `node tests\recognition_live_commit_cases.js` para validar que los bloques `final` se consoliden al momento y que un `interim` desplazado no desaparezca sin dejar rastro.
 - Ejecuta `node tests\recognition_recovery_commit_cases.js` para validar que una recuperacion real no pierda el ultimo texto capturado.
 - Ejecuta `node tests\recognition_result_ledger_cases.js` para validar que los resultados previos de la sesion no desaparezcan cuando cambia solo la cola.
 - Ejecuta `node tests\recognition_handler_binding_cases.js` para validar que una instancia recreada siga teniendo `onresult`, `onerror`, `onend` y `onstart`.
