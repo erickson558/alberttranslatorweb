@@ -97,6 +97,19 @@
     return normalized ? normalized.split(" ") : [];
   }
 
+  function findWordPrefixCount(leftText, rightText) {
+    var leftWords = tokenizeComparableWords(leftText);
+    var rightWords = tokenizeComparableWords(rightText);
+    var max = Math.min(leftWords.length, rightWords.length);
+    var count = 0;
+
+    while (count < max && leftWords[count] === rightWords[count]) {
+      count += 1;
+    }
+
+    return count;
+  }
+
   function findWordOverlapCount(leftText, rightText) {
     var leftWords = tokenizeComparableWords(leftText);
     var rightWords = tokenizeComparableWords(rightText);
@@ -127,6 +140,23 @@
 
     var shortestSide = Math.min(leftWords.length, rightWords.length);
     return overlapCount >= shortestSide || overlapCount >= 4;
+  }
+
+  function shouldReplaceByPrefixRevision(leftText, rightText, prefixCount) {
+    var leftWords = tokenizeComparableWords(leftText);
+    var rightWords = tokenizeComparableWords(rightText);
+    if (!prefixCount || !leftWords.length || !rightWords.length) {
+      return false;
+    }
+
+    // Cuando Chromium corrige la cola de una frase, suele conservar un prefijo
+    // largo y reescribir solo el final. En ese caso conviene reemplazar.
+    var shortestSide = Math.min(leftWords.length, rightWords.length);
+    if (shortestSide < 4) {
+      return false;
+    }
+
+    return prefixCount >= 4 && prefixCount >= Math.ceil(shortestSide * 0.6);
   }
 
   function mergeWithLastCommittedLine(committedText, nextChunk) {
@@ -171,6 +201,12 @@
       return lines.join("\n");
     }
 
+    var prefixCount = findWordPrefixCount(lastLine, incoming);
+    if (shouldReplaceByPrefixRevision(lastLine, incoming, prefixCount)) {
+      lines[lastIndex] = incoming;
+      return lines.join("\n");
+    }
+
     lines.push(incoming);
     return lines.join("\n");
   }
@@ -203,7 +239,7 @@
     var base = String(committedText || "");
     var text = base;
     if (normalizedInterim) {
-      text = base ? (base + "\n" + normalizedInterim) : normalizedInterim;
+      text = mergeWithLastCommittedLine(base, normalizedInterim);
     }
 
     return {

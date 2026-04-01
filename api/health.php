@@ -9,6 +9,12 @@ send_json([
     'mode' => APP_MODE,
     'transcription' => [
         'backend' => 'browser_speech_recognition',
+        'on_device_policy' => 'enabled',
+        'external_streaming_fallback' => [
+            'provider' => 'assemblyai',
+            'configured' => trim((string)ASSEMBLYAI_API_KEY) !== '',
+            'token_endpoint' => '/api/stt-stream-token.php',
+        ],
     ],
     'translation' => [
         'backend' => 'google_public_endpoint_with_fallback',

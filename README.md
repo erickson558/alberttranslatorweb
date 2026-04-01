@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.13
+Version actual: V1.5.26
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
@@ -15,10 +15,13 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - Mantiene una UX fluida para texto incremental y traduccion instantanea.
 - Incluye watchdog de reconocimiento para recuperar automaticamente la captura cuando hay cortes o silencios prolongados.
 - Permite ajustar desde la UI la sensibilidad del watchdog de voz para reaccionar mas rapido ante pausas o cuelgues del motor.
+- Intenta usar reconocimiento local del navegador cuando Chromium lo soporta, para reducir dependencia del servicio remoto del navegador.
 - Evita retraducciones redundantes con encolado en vivo deduplicado y control de frecuencia.
+- Reduce carga sobre el reconocimiento retrasando la traduccion en vivo hasta que el texto se estabiliza o llega como resultado final.
 - Muestra estado operativo en tiempo real (microfono, incremental, segmentos y palabras).
 - Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
 - Permite exportar a TXT: ambos paneles, solo transcripcion o solo traduccion.
+- Deja preparado un fallback externo de streaming con token temporal en `/api/stt-stream-token.php` para integraciones futuras con proveedor gratuito.
 
 ## Arquitectura
 
@@ -28,6 +31,7 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - frontend/js/transcription-engine.js: motor de transcripcion separado.
 - frontend/js/translation-engine.js: motor de traduccion separado con procesamiento por frases/oraciones.
 - api/health.php: endpoint de salud.
+- api/stt-stream-token.php: endpoint opcional para emitir token temporal de STT streaming externo.
 - api/translate-text.php: endpoint de traduccion.
 - backend/config.php: configuracion global y version de app.
 - backend/http.php: utilidades HTTP/JSON.
@@ -110,6 +114,7 @@ Historial de cambios en CHANGELOG.md.
 - Version unica y sincronizada en app, git y GitHub.
 - Recuperacion robusta ante errores transitorios de reconocimiento y red.
 - Dedupe y throttling de traduccion en vivo para reducir carga y evitar efectos de rebote.
+- Recuperacion profunda cuando Chromium no devuelve `onend` despues de `stop()` en Web Speech API.
 
 ## Licencia
 

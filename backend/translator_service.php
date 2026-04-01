@@ -587,6 +587,31 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         $provider = 'auto';
     }
 
+    $tryLocalFallback = function ($text, $src, $tgt) {
+        $resolvedSource = strtolower((string)$src);
+        if ($resolvedSource === 'auto') {
+            if (strtolower((string)$tgt) === 'es' && is_likely_english_text($text)) {
+                $resolvedSource = 'en';
+            } elseif (strtolower((string)$tgt) === 'en' && is_likely_spanish_text($text)) {
+                $resolvedSource = 'es';
+            }
+        }
+
+        $translated = translate_with_local_glossary($text, $resolvedSource, $tgt);
+        if (is_effective_translation($text, $translated, $resolvedSource, $tgt)) {
+            return $translated;
+        }
+
+        if (($resolvedSource === 'en' || $resolvedSource === 'auto') && strtolower((string)$tgt) === 'es') {
+            $translated = translate_with_force_en_es($text);
+            if (is_effective_translation($text, $translated, 'en', $tgt)) {
+                return $translated;
+            }
+        }
+
+        return '';
+    };
+
     $tryGoogle = function ($text, $src, $tgt) use (&$detectedLanguage) {
         $translated = translate_with_google_endpoint($text, $src, $tgt, $detectedLanguage);
         if (is_effective_translation($text, $translated, $src, $tgt)) {
@@ -613,6 +638,11 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         if ($translated !== '') {
             return $translated;
         }
+
+        $translated = $tryLocalFallback($transcript, $source, $target);
+        if ($translated !== '') {
+            return $translated;
+        }
     }
 
     if ($provider === 'mymemory-free') {
@@ -625,6 +655,11 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         if ($translated !== '') {
             return $translated;
         }
+
+        $translated = $tryLocalFallback($transcript, $source, $target);
+        if ($translated !== '') {
+            return $translated;
+        }
     }
 
     if ($provider === 'libretranslate-free') {
@@ -634,6 +669,11 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
         }
 
         $translated = $tryGoogle($transcript, $source, $target);
+        if ($translated !== '') {
+            return $translated;
+        }
+
+        $translated = $tryLocalFallback($transcript, $source, $target);
         if ($translated !== '') {
             return $translated;
         }
@@ -652,6 +692,11 @@ function translate_transcript($transcript, $source, $target, &$detectedLanguage,
 
         $translated = translate_with_mymemory($transcript, $source, $target);
         if (is_effective_translation($transcript, $translated, $source, $target)) {
+            return $translated;
+        }
+
+        $translated = $tryLocalFallback($transcript, $source, $target);
+        if ($translated !== '') {
             return $translated;
         }
     }

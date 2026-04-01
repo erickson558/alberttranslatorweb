@@ -100,6 +100,11 @@ let recognitionLastEventAt = 0;
 let recognitionConsecutiveErrors = 0;
 let recognitionLastRestartAt = 0;
 let recognitionLastHardRecoveryAt = 0;
+let recognitionSessionStartedAt = 0;
+let recognitionRestartPendingSince = 0;
+let recognitionRestartPendingReason = "";
+let recognitionUseLocalProcessing = false;
+let recognitionLocalSupportCache = {};
 let incrementalSourceSegments = [];
 let incrementalTranslatedSegments = [];
 let incrementalContextKey = "";
@@ -109,6 +114,10 @@ let prefersReducedMotion = false;
 let lastLiveEnqueueTextNorm = "";
 let lastLiveEnqueueAt = 0;
 let uiPrefsWereRestored = false;
+const WATCHDOG_POLL_INTERVAL_MS = 5000;
+const WATCHDOG_ROLLING_REFRESH_MS = 45000;
+const WATCHDOG_REFRESH_IDLE_MS = 1500;
+const RECOGNITION_END_WAIT_MS = 1600;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
@@ -198,7 +207,7 @@ function getLastCommittedTranscriptNormalized() {
   return normalizeFlatText(lines[lines.length - 1]);
 }
 
-function canCommitInterimChunk(chunk) {
+function canCommitInterimChunk(chunk, reason) {
   var text = String(chunk || "").trim();
   if (!text) {
     return false;
@@ -214,9 +223,16 @@ function canCommitInterimChunk(chunk) {
     return false;
   }
 
-  // Filtra ruido muy corto en interim.
   var words = countWords(text);
-  if (words < 2 && text.length < 9) {
+  var finalizingReason = !!reason && reason !== "silence";
+
+  // En silencio normal sigue filtrando ruido corto.
+  if (!finalizingReason && words < 2 && text.length < 9) {
+    return false;
+  }
+
+  // En onend/watchdog/stop permite conservar una cola corta real.
+  if (finalizingReason && words < 2 && text.length < 5) {
     return false;
   }
 
@@ -225,14 +241,14 @@ function canCommitInterimChunk(chunk) {
 
 function commitPendingInterim(reason) {
   var pending = String(lastInterimChunk || "").trim();
-  if (!canCommitInterimChunk(pending)) {
+  if (!canCommitInterimChunk(pending, reason)) {
     return false;
   }
 
   appendTranscriptChunk(pending);
   lastInterimChunk = "";
 
-  var transcriptNow = getTranscriptFieldText();
+  var transcriptNow = String(transcriptForTranslation || "").trim();
   if (transcriptNow) {
     maybeEnqueueLiveTranslation(transcriptNow, reason !== "silence");
   }
@@ -294,7 +310,13 @@ function updateRuntimeStrip() {
 
   var micText = "Micrófono: detenido";
   var micTone = "idle";
-  if (listeningRequested && listening) {
+  if (listeningRequested && recognitionRestartPendingSince) {
+    var waitingSeconds = Math.max(0, Math.floor((Date.now() - recognitionRestartPendingSince) / 1000));
+    micText = waitingSeconds > 0
+      ? ("Micrófono: refrescando captura · espera " + waitingSeconds + "s")
+      : "Micrófono: refrescando captura";
+    micTone = "warn";
+  } else if (listeningRequested && listening) {
     var idleSeconds = recognitionLastResultAt ? Math.floor((Date.now() - recognitionLastResultAt) / 1000) : 0;
     micText = idleSeconds > 0
       ? ("Micrófono: activo · última voz hace " + idleSeconds + "s")
@@ -330,9 +352,14 @@ function updateRuntimeStrip() {
   setChipTone(runtimeWordState, wordCount > 0 ? "ok" : "idle");
 
   var watchdogSeconds = Math.floor(getWatchdogSilenceThresholdMs() / 1000);
-  var watchdogText = "Watchdog: " + watchdogSeconds + "s · pase 5s";
+  var watchdogPollSeconds = Math.max(1, Math.floor(WATCHDOG_POLL_INTERVAL_MS / 1000));
+  var watchdogText = "Watchdog: " + watchdogSeconds + "s · pase " + watchdogPollSeconds + "s";
   var watchdogTone = listeningRequested ? "ok" : "idle";
-  if (listeningRequested && listening) {
+  if (listeningRequested && recognitionRestartPendingSince) {
+    var restartWaitSeconds = Math.max(0, Math.floor((Date.now() - recognitionRestartPendingSince) / 1000));
+    watchdogText = "Watchdog: recuperando" + (restartWaitSeconds > 0 ? (" · " + restartWaitSeconds + "s") : "");
+    watchdogTone = "warn";
+  } else if (listeningRequested && listening) {
     var watchdogIdleSeconds = recognitionLastResultAt ? Math.floor((Date.now() - recognitionLastResultAt) / 1000) : 0;
     if (watchdogIdleSeconds >= watchdogSeconds) {
       watchdogTone = "warn";
@@ -458,7 +485,11 @@ function wireEvents() {
   sourceSelect.addEventListener("change", function () {
     resetIncrementalTranslationState();
     persistUiPreferences();
+    recognitionUseLocalProcessing = false;
     if (recognition && listening) {
+      if ("processLocally" in recognition) {
+        recognition.processLocally = false;
+      }
       recognition.lang = resolveRecognitionLang(sourceSelect.value);
     }
   });
@@ -666,7 +697,63 @@ function getWatchdogSilenceThresholdMs() {
 }
 
 function getWatchdogStaleThresholdMs() {
-  return Math.max(getWatchdogSilenceThresholdMs() + 4000, 12000);
+  return Math.max(getWatchdogSilenceThresholdMs() + 6000, 15000);
+}
+
+function shouldRecreateRecognitionForRestart(reason) {
+  var tag = String(reason || "").toLowerCase();
+  return /watchdog|rolling-refresh|aborted|stale|hard|visibility-resume/.test(tag);
+}
+
+function resetRecognitionRestartPending() {
+  recognitionRestartPendingSince = 0;
+  recognitionRestartPendingReason = "";
+}
+
+function isAwaitingRecognitionEnd(reason) {
+  return /await-end/.test(String(reason || "").toLowerCase());
+}
+
+async function ensureLocalRecognitionReady(languageCode) {
+  if (
+    !SpeechRecognitionCtor
+    || typeof SpeechRecognitionCtor.available !== "function"
+    || typeof SpeechRecognitionCtor.install !== "function"
+  ) {
+    return false;
+  }
+
+  var lang = resolveRecognitionLang(languageCode);
+  if (Object.prototype.hasOwnProperty.call(recognitionLocalSupportCache, lang)) {
+    return recognitionLocalSupportCache[lang] === true;
+  }
+
+  try {
+    var availability = await SpeechRecognitionCtor.available({
+      langs: [lang],
+      processLocally: true,
+    });
+
+    if (availability === "available") {
+      recognitionLocalSupportCache[lang] = true;
+      return true;
+    }
+
+    if (availability === "downloadable" || availability === "downloading") {
+      setStatus("processing", "Preparando reconocimiento local...");
+      var installed = await SpeechRecognitionCtor.install({
+        langs: [lang],
+        processLocally: true,
+      });
+      recognitionLocalSupportCache[lang] = installed === true;
+      return recognitionLocalSupportCache[lang];
+    }
+  } catch (_e) {
+    // Si el navegador no soporta o falla la instalacion, sigue con modo remoto.
+  }
+
+  recognitionLocalSupportCache[lang] = false;
+  return false;
 }
 
 function readPrefsCookie() {
@@ -706,9 +793,34 @@ function getLiveStabilityDelayMs() {
   return getLiveTranslationMode() === "fast" ? 170 : 320;
 }
 
+function getLiveStableTranslationDelayMs() {
+  // La traduccion no debe competir con la captura del microfono en cada evento.
+  return getLiveTranslationMode() === "fast" ? 900 : 1350;
+}
+
 function scheduleLivePreviewTranslation(liveTranscript) {
   // Deshabilitado para evitar mezcla de idiomas por previsualizaciones parciales.
   return;
+}
+
+function scheduleStableLiveTranslation(text) {
+  if (livePreviewDelayTimer) {
+    clearTimeout(livePreviewDelayTimer);
+    livePreviewDelayTimer = null;
+  }
+
+  var transcript = String(text || "").trim();
+  if (!transcript || !listeningRequested) {
+    return;
+  }
+
+  livePreviewDelayTimer = setTimeout(function () {
+    livePreviewDelayTimer = null;
+    if (!listeningRequested) {
+      return;
+    }
+    maybeEnqueueLiveTranslation(transcript, false);
+  }, getLiveStableTranslationDelayMs());
 }
 
 function localWordByWordTranslate(text, dictionary) {
@@ -896,6 +1008,17 @@ function composeTranscriptForTranslation(interimText) {
   var interim = String(interimText || "").trim();
   if (!interim) {
     return String(base || "").replace(/\s+/g, " ").trim();
+  }
+  if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.appendTranscriptChunk) {
+    var preview = window.AlbertTranscriptionEngine.appendTranscriptChunk(
+      {
+        committedText: transcriptCommittedText,
+        forTranslation: transcriptForTranslation,
+      },
+      interim,
+      sourceSelect.value
+    );
+    return String(preview && preview.forTranslation ? preview.forTranslation : "").replace(/\s+/g, " ").trim();
   }
   return String((base ? base + " " : "") + interim).replace(/\s+/g, " ").trim();
 }
@@ -1739,15 +1862,22 @@ function bindRecognitionHandlers(recognitionInstance) {
 
   recognitionInstance.onstart = function () {
     clearRecognitionRestartTimer();
+    resetRecognitionRestartPending();
+    if (livePreviewDelayTimer) {
+      clearTimeout(livePreviewDelayTimer);
+      livePreviewDelayTimer = null;
+    }
     recognitionRestartAttempts = 0;
     recognitionConsecutiveErrors = 0;
     recognitionLastResultAt = Date.now();
     recognitionLastEventAt = Date.now();
     recognitionLastRestartAt = Date.now();
+    recognitionSessionStartedAt = Date.now();
     startRecognitionWatchdog();
     listening = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
+    showError("");
     setStatus("listening", "Escuchando en vivo");
   };
 
@@ -1773,6 +1903,7 @@ function bindRecognitionHandlers(recognitionInstance) {
       listeningRequested = false;
       stopRecognitionWatchdog();
       clearRecognitionRestartTimer();
+      resetRecognitionRestartPending();
       listening = false;
       startBtn.disabled = false;
       stopBtn.disabled = true;
@@ -1796,7 +1927,7 @@ function bindRecognitionHandlers(recognitionInstance) {
     clearInterimCommitTimer();
     commitPendingInterim("onend");
 
-    var transcriptNow = getTranscriptFieldText();
+    var transcriptNow = String(transcriptForTranslation || "").trim();
     if (transcriptNow) {
       maybeEnqueueLiveTranslation(transcriptNow, true);
     }
@@ -1807,7 +1938,13 @@ function bindRecognitionHandlers(recognitionInstance) {
       startBtn.disabled = false;
       stopBtn.disabled = true;
       transcriptOutput.classList.remove("streaming");
+      resetRecognitionRestartPending();
       setStatus("idle", "Inactivo");
+      return;
+    }
+
+    // Si ya hay un reinicio planificado, evita duplicar timers y carreras.
+    if (recognitionRestartTimer) {
       return;
     }
 
@@ -1816,6 +1953,7 @@ function bindRecognitionHandlers(recognitionInstance) {
 
   recognitionInstance.onresult = function (event) {
     recognitionLastEventAt = Date.now();
+    showError("");
     var parsed = null;
     if (window.AlbertTranscriptionEngine && window.AlbertTranscriptionEngine.parseRecognitionEvent) {
       parsed = window.AlbertTranscriptionEngine.parseRecognitionEvent(event);
@@ -1830,6 +1968,10 @@ function bindRecognitionHandlers(recognitionInstance) {
       appendTranscriptChunk(finalChunk);
       lastInterimChunk = "";
       recognitionLastResultAt = Date.now();
+      var stableTranscriptNow = String(transcriptForTranslation || "").trim();
+      if (stableTranscriptNow) {
+        maybeEnqueueLiveTranslation(stableTranscriptNow, true);
+      }
       if (livePreviewDelayTimer) {
         clearTimeout(livePreviewDelayTimer);
         livePreviewDelayTimer = null;
@@ -1842,21 +1984,27 @@ function bindRecognitionHandlers(recognitionInstance) {
       scheduleInterimCommitBySilence();
     } else {
       clearInterimCommitTimer();
+      if (livePreviewDelayTimer) {
+        clearTimeout(livePreviewDelayTimer);
+        livePreviewDelayTimer = null;
+      }
     }
 
-    var transcriptNow = getTranscriptFieldText();
+    var transcriptNow = composeTranscriptForTranslation(interimChunk);
     if (!transcriptNow || transcriptNow.length < 2) {
       return;
     }
 
-    maybeEnqueueLiveTranslation(transcriptNow, false);
+    if (interimChunk) {
+      scheduleStableLiveTranslation(transcriptNow);
+    }
 
     lastInterimTranslateAt = Date.now();
     recognitionLastResultAt = Date.now();
   };
 }
 
-function startListening() {
+async function startListening() {
   showError("");
   if (!SpeechRecognitionCtor) {
     showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
@@ -1869,6 +2017,14 @@ function startListening() {
 
   listeningRequested = true;
   recognitionLastEventAt = Date.now();
+  recognitionUseLocalProcessing = false;
+  setStatus("processing", "Iniciando escucha...");
+
+  try {
+    recognitionUseLocalProcessing = await ensureLocalRecognitionReady(sourceSelect.value);
+  } catch (_e) {
+    recognitionUseLocalProcessing = false;
+  }
 
   initializeRecognitionInstance();
   bindRecognitionHandlers(recognition);
@@ -1896,6 +2052,9 @@ function initializeRecognitionInstance() {
   recognition.interimResults = true;
   recognition.maxAlternatives = 5;
   recognition.lang = resolveRecognitionLang(sourceSelect.value);
+  if (recognitionUseLocalProcessing && "processLocally" in recognition) {
+    recognition.processLocally = true;
+  }
 }
 
 function clearRecognitionRestartTimer() {
@@ -1930,6 +2089,28 @@ function startRecognitionWatchdog() {
       return;
     }
 
+    // Chromium suele degradarse tras un rato aunque al inicio capture bien.
+    // Refresca la instancia en una ventana de calma para volver al estado "fresco".
+    var sessionAgeMs = now - Number(recognitionSessionStartedAt || 0);
+    var hasPendingInterim = String(lastInterimChunk || "").trim().length > 0;
+    if (
+      recognitionSessionStartedAt
+      && sessionAgeMs >= WATCHDOG_ROLLING_REFRESH_MS
+      && idleMs >= WATCHDOG_REFRESH_IDLE_MS
+      && !hasPendingInterim
+      && (Date.now() - recognitionLastRestartAt) >= 850
+    ) {
+      try {
+        if (recognition) {
+          recognition.stop();
+        }
+      } catch (_eRefresh) {
+        // Ignorado.
+      }
+      scheduleRecognitionRestart("rolling-refresh", 180);
+      return;
+    }
+
     if (idleMs < idleThresholdMs) {
       return;
     }
@@ -1941,7 +2122,6 @@ function startRecognitionWatchdog() {
       return;
     }
 
-    showError("Se detectó pausa en transcripción, reintentando captura...");
     try {
       if (recognition) {
         recognition.stop();
@@ -1950,7 +2130,7 @@ function startRecognitionWatchdog() {
       // Ignorado.
     }
     scheduleRecognitionRestart("watchdog", 220);
-  }, 5000);
+  }, WATCHDOG_POLL_INTERVAL_MS);
 }
 
 function forceRecognitionRecovery(reason) {
@@ -1967,6 +2147,7 @@ function forceRecognitionRecovery(reason) {
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
+  resetRecognitionRestartPending();
 
   try {
     if (recognition) {
@@ -1986,7 +2167,7 @@ function forceRecognitionRecovery(reason) {
 
   recognition = null;
   listening = false;
-  showError("Transcripcion pausada, reiniciando captura...");
+  showError("");
   scheduleRecognitionRestart(reason + "-hard", 280, true);
 }
 
@@ -1995,31 +2176,55 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
     return;
   }
 
+  var normalizedReason = String(reason || "restart");
+  if (!recognitionRestartPendingSince) {
+    recognitionRestartPendingSince = Date.now();
+  }
+  if (!recognitionRestartPendingReason || !isAwaitingRecognitionEnd(normalizedReason)) {
+    recognitionRestartPendingReason = normalizedReason;
+  }
+
   if (!skipThrottle && (Date.now() - recognitionLastRestartAt) < 250) {
     return;
   }
 
   clearRecognitionRestartTimer();
   stopRecognitionWatchdog();
+  showError("");
   setStatus("processing", "Reconectando escucha...");
 
-  recognitionRestartAttempts += 1;
   var maxAttempts = 14;
-  if (recognitionRestartAttempts > maxAttempts) {
-    recognitionRestartAttempts = 0;
-    showError("Motor de voz saturado, aplicando recuperacion profunda...");
-    forceRecognitionRecovery(reason + "-max-attempts");
-    return;
-  }
-
   var backoff = Math.min(1800, Math.max(120, Number(delayMs || 180)) + (recognitionRestartAttempts - 1) * 120);
   recognitionRestartTimer = setTimeout(function () {
     if (!listeningRequested) {
+      resetRecognitionRestartPending();
       return;
     }
+
+    // Espera a que el ciclo anterior cierre del todo para reiniciar como un start "limpio".
+    if (listening) {
+      var waitingForEndMs = Date.now() - Number(recognitionRestartPendingSince || Date.now());
+      if (waitingForEndMs >= RECOGNITION_END_WAIT_MS) {
+        forceRecognitionRecovery((recognitionRestartPendingReason || normalizedReason) + "-stuck");
+        return;
+      }
+      scheduleRecognitionRestart((recognitionRestartPendingReason || normalizedReason) + "-await-end", 140, true);
+      return;
+    }
+
+    recognitionRestartAttempts += 1;
+    if (recognitionRestartAttempts > maxAttempts) {
+      recognitionRestartAttempts = 0;
+      showError("Motor de voz saturado, aplicando recuperacion profunda...");
+      forceRecognitionRecovery((recognitionRestartPendingReason || normalizedReason) + "-max-attempts");
+      return;
+    }
+
     recognitionLastRestartAt = Date.now();
+    var restartReason = recognitionRestartPendingReason || normalizedReason;
+    var recreateInstance = shouldRecreateRecognitionForRestart(restartReason);
     try {
-      if (!recognition) {
+      if (!recognition || recreateInstance) {
         initializeRecognitionInstance();
       }
       if (recognition) {
@@ -2043,7 +2248,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
       // Sigue al siguiente intento.
     }
 
-    scheduleRecognitionRestart(reason + "-retry", backoff + 140);
+    scheduleRecognitionRestart(restartReason + "-retry", backoff + 140);
   }, backoff);
 }
 
@@ -2052,6 +2257,8 @@ function stopListening() {
   lastIncrementalAddedCount = 0;
   recognitionConsecutiveErrors = 0;
   recognitionLastEventAt = 0;
+  recognitionSessionStartedAt = 0;
+  resetRecognitionRestartPending();
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
@@ -2089,6 +2296,8 @@ function clearOutputs() {
   recognitionRestartAttempts = 0;
   recognitionLastResultAt = 0;
   recognitionLastEventAt = 0;
+  recognitionSessionStartedAt = 0;
+  resetRecognitionRestartPending();
   recognitionConsecutiveErrors = 0;
   lastIncrementalAddedCount = 0;
   resetLiveEnqueueState();

@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.26] - 2026-04-01
+### Fixed
+- Evitado el estado colgado donde Chromium quedaba "activo pero mudo" cuando `stop()` no devolvia `onend`; ahora se escala a recuperacion profunda y se recrea la instancia.
+- Corregida la duplicacion/borrado de frases cuando Chromium revisa una cola larga conservando gran parte del prefijo.
+- Reducida la perdida de transcripcion al sacar la traduccion en vivo del camino critico de `onresult`.
+- Corregido el caso donde `/api/translate-text.php` podia devolver traduccion vacia sin activar los fallbacks locales ya implementados.
+
+### Added
+- Politica de `on-device-speech-recognition` y deteccion/instalacion de reconocimiento local cuando el navegador lo soporta.
+- Endpoint opcional `/api/stt-stream-token.php` para token temporal de fallback STT externo gratuito.
+- Prueba basica `tests/transcription_engine_merge_cases.js` para regresiones de merge de transcripcion.
+
+### Changed
+- Synchronized version to V1.5.26 across VERSION, APP runtime config, and README.
+
 ## [V1.5.13] - 2026-03-12
 ### Added
 - Control en la UI para ajustar la sensibilidad del watchdog de voz entre perfiles mas agresivos o mas tolerantes.

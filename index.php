@@ -1,5 +1,8 @@
 <?php
 require_once __DIR__ . '/backend/config.php';
+if (!headers_sent()) {
+  header('Permissions-Policy: on-device-speech-recognition=(self)');
+}
 $cssVersion = @filemtime(__DIR__ . '/frontend/css/style.css');
 $jsVersion = @filemtime(__DIR__ . '/frontend/js/app.js');
 ?><!doctype html>
