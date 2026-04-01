@@ -8,7 +8,7 @@ send_json([
     'version' => APP_VERSION,
     'mode' => APP_MODE,
     'transcription' => [
-        'backend' => 'local_whisper_transformersjs_with_browser_fallback',
+        'backend' => 'browser_speech_recognition',
     ],
     'translation' => [
         'backend' => 'google_public_endpoint_with_fallback',

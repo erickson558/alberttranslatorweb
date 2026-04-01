@@ -1,94 +1,65 @@
 # AlbertTranslator PHP
 
-Version `V1.6.1` para EasyPHP, sin dependencias de Python y con arquitectura separada frontend/backend.
+Version actual: V1.5.13
 
-## Que hace
+Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
-- Modo oscuro futurista por defecto.
-- Captura voz gratis con Whisper local en el navegador mediante `Transformers.js`.
-- Fallback al motor `Web Speech API` del navegador cuando se necesite compatibilidad.
-- Traduccion fluida y seguimiento automatico al final del texto.
-- Lectura por voz (bocina) para transcripcion y traduccion.
-- Traduccion manual de texto sin microfono.
-- Iconos de speaker estilo traductor moderno.
-- Transcripcion intermedia en vivo con mayor sensibilidad y reconexion automatica de escucha.
-- Corte inmediato de lectura por voz al refrescar/cerrar pagina.
-- Correccion de traduccion para evitar devolver texto original cuando el destino es distinto.
-- Fallback local EN<->ES para mantener traduccion util cuando servicios externos no responden.
-- Traduccion en vivo mas rapida durante la transcripcion (preview + menor latencia de despacho).
-- Mejoras por frases en fallback EN->ES para evitar mezclas ingles/espanol en expresiones comunes.
-- Selector de proveedor free en la nube: `Auto`, `Google Free`, `MyMemory Free`.
-- `Google Free` configurado por defecto.
-- Traduccion en vivo alineada con el contenido actual visible del cuadro de transcripcion.
-- Preview local solo cuando la calidad minima es segura; la traduccion en vivo prioriza exactitud sobre pseudo-traducciones.
-- Compatibilidad reforzada en Windows cuando PHP no tiene extension `curl`.
-- Primera carga del motor local con descarga y cacheo del modelo ONNX en el navegador.
-- Whisper local configurado para usar el backend `WASM` estable por defecto, evitando fallos intermitentes de inferencia con `WebGPU`.
-- Fusion inteligente de bloques `interim/final` para reducir repeticion de palabras y frases en la transcripcion.
-- Deduplicacion de cola reciente de transcripcion para bloques finales que reagrupan varias frases ya confirmadas.
-- Typewriter restaurado en transcripcion sin usar el textarea animado como fuente de verdad para traduccion/copia/exportacion.
-- Reconstruccion de la sesion de voz desde `SpeechRecognitionResultList` completa para reducir perdida de transcripcion en vivo.
-- Ledger de resultados por indice para conservar bloques previos aunque Web Speech solo reescriba la cola cambiada.
-- Watchdog de voz con reintento y recuperacion para evitar perdida de dialogo cuando Web Speech se queda sin eventos o deja de devolver resultados.
-- Politica de watchdog ajustada para no reconectar por silencios normales y reservar la recuperacion dura para estancamientos prolongados.
-- La pausa breve ya no compromete ni parte la sesion de voz; solo fuerza refresco de traduccion y reserva el guardado para fallos reales, `stop` y `onend`.
-- Menor perdida de palabras y frases cortas durante streaming al priorizar la mejor alternativa de reconocimiento y guardar el ultimo interim antes de una recuperacion real.
-- Promocion inmediata de bloques `final` al historial para que no se pierdan si `Web Speech` recicla la lista de resultados dentro de la misma sesion.
-- Preservacion del `interim` anterior cuando el motor lo reemplaza por otro texto sin solapamiento claro, reduciendo huecos en conversaciones largas.
-- Whisper local por chunks cortos con solape para reducir cortes de frases largas sin depender del motor remoto del navegador.
-- Modelos oficiales `Xenova/whisper-tiny(.en)` para maximizar compatibilidad con `Transformers.js`.
-- Wiring de handlers de `SpeechRecognition` ampliado para que las instancias recreadas por reconexion sigan capturando resultados, errores y senales bajas de audio/voz.
-- Commit y render de bloques multi-frase por linea para no colapsar frases distintas cuando el motor devuelve varios resultados en un mismo evento.
-- Monitor opcional de actividad real del microfono para recuperar antes la escucha cuando entra voz pero `Web Speech` no devuelve resultados.
-- Traduccion manual en tiempo real basada en escritura del textfield de origen.
-- Exportacion separada de transcripcion y traduccion en TXT.
-- Traduccion server-side por fragmentos para evitar error por texto largo.
-- Efecto typewriter restaurado para la salida de traduccion.
+## Que hace el programa
+
+- Captura voz en navegador con Web Speech API.
+- Traduce en vivo y en modo manual.
+- Traduce siempre desde el contenido completo del cuadro de transcripcion, evitando previsualizaciones parciales que mezclen idiomas.
+- Soporta lectura en voz alta de transcripcion y traduccion.
+- Incluye fallback local EN<->ES cuando proveedores externos fallan.
+- Permite seleccionar proveedor de traduccion: Auto, Google Free, LibreTranslate Free, MyMemory Free.
+- Mantiene una UX fluida para texto incremental y traduccion instantanea.
+- Incluye watchdog de reconocimiento para recuperar automaticamente la captura cuando hay cortes o silencios prolongados.
+- Permite ajustar desde la UI la sensibilidad del watchdog de voz para reaccionar mas rapido ante pausas o cuelgues del motor.
+- Evita retraducciones redundantes con encolado en vivo deduplicado y control de frecuencia.
+- Muestra estado operativo en tiempo real (microfono, incremental, segmentos y palabras).
+- Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
+- Permite exportar a TXT: ambos paneles, solo transcripcion o solo traduccion.
 
 ## Arquitectura
 
-- `index.php`: entrypoint web y wiring de assets.
-- `frontend/css/style.css`: UI/UX y tema oscuro.
-- `frontend/js/app.js`: captura voz, Whisper local, UX fluida, lectura por voz.
-- `frontend/js/local-stt-worker.js`: worker del motor Whisper local con `Transformers.js`.
-- `api/health.php`: estado de la API.
-- `api/translate-text.php`: endpoint de traduccion.
-- `backend/config.php`: constantes globales y version.
-- `backend/http.php`: helpers HTTP/JSON.
-- `backend/translator_service.php`: logica de traduccion.
-- `tests/translation_smoke.php`: prueba de humo de traduccion.
-- `tests/local_whisper_helpers_cases.js`: regresion de seleccion de perfil Whisper y downsampling basico.
-- `tests/transcript_merge_cases.js`: regresion de fusion/deduplicacion de transcripcion.
-- `tests/recognition_watchdog_cases.js`: regresion del fallback del watchdog de reconocimiento.
-- `tests/recognition_live_commit_cases.js`: regresion de consolidacion temprana de bloques `final` y preservacion de `interim` perdido.
-- `tests/recognition_recovery_commit_cases.js`: regresion de guardado del ultimo texto antes de reiniciar una sesion de voz rota.
-- `tests/recognition_result_ledger_cases.js`: regresion del ledger por indice para no perder bloques previos entre eventos.
-- `tests/recognition_handler_binding_cases.js`: regresion de wiring para reconexiones y recreacion de la instancia de voz.
-- `tests/recognition_multiline_commit_cases.js`: regresion para preservar frases separadas dentro de un mismo bloque final/interim.
-- `tests/recognition_activity_recovery_cases.js`: regresion de recuperacion temprana cuando hay actividad de voz sin resultados.
+- index.php: entrada principal de la aplicacion y configuracion de assets.
+- frontend/css/style.css: estilos y experiencia visual.
+- frontend/js/app.js: logica de interfaz, reconocimiento de voz y eventos de usuario.
+- frontend/js/transcription-engine.js: motor de transcripcion separado.
+- frontend/js/translation-engine.js: motor de traduccion separado con procesamiento por frases/oraciones.
+- api/health.php: endpoint de salud.
+- api/translate-text.php: endpoint de traduccion.
+- backend/config.php: configuracion global y version de app.
+- backend/http.php: utilidades HTTP/JSON.
+- backend/translator_service.php: logica de traduccion y fallback.
 
-## Requisitos
+## Requisitos y dependencias
 
-- EasyPHP / Apache con PHP 5.4+.
-- Navegador Chromium/Chrome/Edge moderno para Whisper local y lectura de voz.
-- Internet en la primera carga para descargar y cachear el modelo del Hub de Hugging Face.
-- Opcional: extension `curl` en PHP para mayor compatibilidad de traduccion.
+Dependencias de ejecucion:
+- PHP 5.4 o superior.
+- Servidor web (EasyPHP/Apache).
+- Navegador Chromium/Chrome/Edge para reconocimiento de voz y TTS.
 
-## Uso
+Dependencias opcionales:
+- Extension curl de PHP para mejorar compatibilidad con servicios externos.
 
-1. Abre `http://localhost:888/monitoreos/AlbertTranslator/`.
-2. Permite acceso al microfono.
-3. Por defecto: origen `en` (Ingles), destino `es` (Espanol).
-4. Deja `Whisper local gratis` como motor de transcripcion recomendado.
-5. Pulsa `Iniciar escucha` para transcribir y traducir.
-6. La primera vez el navegador descargara y cacheara el modelo local; despues el arranque sera mucho mas rapido.
+Dependencias de CI/CD:
+- GitHub Actions.
+- softprops/action-gh-release para publicar releases automaticos.
+
+## Ejecucion local
+
+1. Publica este directorio dentro de tu document root de EasyPHP.
+2. Abre http://localhost:888/monitoreos/AlbertTranslator/
+3. Permite acceso al microfono.
+4. Usa Iniciar escucha para transcripcion y traduccion continua.
 
 ## API
 
-- `GET /monitoreos/AlbertTranslator/api/health.php`
-- `POST /monitoreos/AlbertTranslator/api/translate-text.php`
+- GET /monitoreos/AlbertTranslator/api/health.php
+- POST /monitoreos/AlbertTranslator/api/translate-text.php
 
-Ejemplo JSON para traduccion:
+Ejemplo de payload:
 
 ```json
 {
@@ -98,27 +69,49 @@ Ejemplo JSON para traduccion:
 }
 ```
 
-## Validacion basica
+## Politica de versionado
 
-- Ejecuta `C:\Program Files (x86)\EasyPHP-Webserver-14.1b2\binaries\php\php.exe tests\translation_smoke.php` para una prueba rapida de traduccion.
-- Ejecuta `node tests\local_whisper_helpers_cases.js` para validar seleccion de perfil Whisper y downsampling de audio.
-- Ejecuta `node tests\transcript_merge_cases.js` para validar deduplicacion de bloques de transcripcion.
-- Ejecuta `node tests\recognition_watchdog_cases.js` para validar que el watchdog reserve la recuperacion dura para estancamientos prolongados.
-- Ejecuta `node tests\recognition_live_commit_cases.js` para validar que los bloques `final` se consoliden al momento y que un `interim` desplazado no desaparezca sin dejar rastro.
-- Ejecuta `node tests\recognition_recovery_commit_cases.js` para validar que una recuperacion real no pierda el ultimo texto capturado.
-- Ejecuta `node tests\recognition_result_ledger_cases.js` para validar que los resultados previos de la sesion no desaparezcan cuando cambia solo la cola.
-- Ejecuta `node tests\recognition_handler_binding_cases.js` para validar que una instancia recreada siga teniendo `onresult`, `onerror`, `onend` y `onstart`.
-- Ejecuta `node tests\recognition_multiline_commit_cases.js` para validar que varias frases del mismo bloque no se aplanen ni se pierdan.
-- Ejecuta `node tests\recognition_activity_recovery_cases.js` para validar la recuperacion temprana por actividad de voz real sin resultados.
+Este proyecto usa Semantic Versioning con prefijo V:
+- Formato: Vx.x.x
+- Patch: correcciones o cambios no disruptivos.
+- Minor: nuevas funcionalidades compatibles.
+- Major: cambios incompatibles.
+
+La version debe mantenerse sincronizada en:
+- VERSION
+- backend/config.php (APP_VERSION)
+- Tag de Git
+- GitHub Release
+
+## Releases automaticos
+
+El workflow en .github/workflows/release.yml se ejecuta en cada push a main y:
+- Lee VERSION.
+- Valida formato Vx.x.x.
+- Crea o valida el tag correspondiente en el commit actual.
+- Publica/actualiza el GitHub Release con esa version.
+
+Checklist recomendada antes de publicar:
+- RELEASE_CHECKLIST.md
+
+Regla operativa recomendada:
+- Cada commit a main debe incluir incremento de VERSION si representa una nueva entrega.
+
+## Changelog
+
+Historial de cambios en CHANGELOG.md.
 
 ## Buenas practicas aplicadas
 
-- Separacion de responsabilidades (frontend, api, backend).
-- Validacion de entrada en API y traduccion por fragmentos para textos largos.
-- Endpoints con respuestas JSON consistentes.
-- Fallback de traduccion sin romper flujo de usuario.
-- Versionado centralizado en backend (`APP_VERSION`) y archivo `VERSION`.
+- Separacion de responsabilidades por capas.
+- Validacion de entrada en endpoints.
+- Contratos JSON consistentes.
+- Automatizacion de release para trazabilidad.
+- Version unica y sincronizada en app, git y GitHub.
+- Recuperacion robusta ante errores transitorios de reconocimiento y red.
+- Dedupe y throttling de traduccion en vivo para reducir carga y evitar efectos de rebote.
 
 ## Licencia
 
-Apache License 2.0. Ver `LICENSE`.
+Distribuido bajo Apache License 2.0.
+Consulta LICENSE para el texto legal completo.

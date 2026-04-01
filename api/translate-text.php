@@ -31,6 +31,10 @@ if ($transcript === '') {
     ], 200);
 }
 
+if (strlen($transcript) > MAX_TRANSCRIPT_LENGTH) {
+    send_json(['error' => 'Texto demasiado largo para traducir.'], 413);
+}
+
 if (!is_valid_lang($target) || $target === 'auto') {
     send_json(['error' => 'Codigo de idioma destino invalido.'], 400);
 }
@@ -39,7 +43,7 @@ if ($source !== 'auto' && !is_valid_lang($source)) {
     send_json(['error' => 'Codigo de idioma origen invalido.'], 400);
 }
 
-$allowedProviders = ['auto', 'google-free', 'mymemory-free'];
+$allowedProviders = ['auto', 'google-free', 'libretranslate-free', 'mymemory-free'];
 if (!in_array($provider, $allowedProviders, true)) {
     send_json(['error' => 'Proveedor de traduccion invalido.'], 400);
 }
