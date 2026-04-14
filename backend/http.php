@@ -131,12 +131,16 @@ function http_get_remote_via_powershell($url, &$httpCode, &$networkError)
     }
 
     $timeout = (int)TRANSLATION_TIMEOUT_SEC;
-    $psScript = "try { "
-        . "$r = Invoke-WebRequest -UseBasicParsing -Uri " . escapeshellarg($url)
-        . " -TimeoutSec " . $timeout . "; "
-        . "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-        . "Write-Output $r.Content; exit 0 "
-        . "} catch { exit 1 }";
+    // BUG FIX: La cadena original usaba dobles comillas PHP, por lo que $r era
+    // interpolada como variable PHP vacía y el script de PowerShell resultaba inválido
+    // (" = Invoke-WebRequest..."). Ahora se usan comillas simples PHP para que $r
+    // llegue literalmente al intérprete de PowerShell como la variable $r correcta.
+    $psScript = 'try { '
+        . '$r = Invoke-WebRequest -UseBasicParsing -Uri ' . escapeshellarg($url)
+        . ' -TimeoutSec ' . $timeout . '; '
+        . '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; '
+        . 'Write-Output $r.Content; exit 0 '
+        . '} catch { exit 1 }';
 
     $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command ' . escapeshellarg($psScript);
     $out = [];

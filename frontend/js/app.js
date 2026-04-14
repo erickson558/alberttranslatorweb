@@ -127,7 +127,7 @@ const LOCAL_GLOSSARY_EN_ES = {
   hello: "hola", hi: "hola", how: "cómo", are: "estás", you: "tú", today: "hoy", tomorrow: "mañana", yesterday: "ayer",
   guys: "chicos", so: "así", but: "pero", have: "he", heard: "escuchado", some: "algunas", people: "personas",
   right: "aquí", here: "aquí", say: "decir", down: "abajo", get: "ponerse", well: "bien", do: "hacer", not: "no", know: "sé", okay: "bien", ok: "bien",
-  good: "bueno", morning: "manana", afternoon: "tarde", night: "noche",
+  good: "bueno", morning: "mañana", afternoon: "tarde", night: "noche",
   thanks: "gracias", thank: "gracias", please: "por favor", yes: "sí", no: "no",
   what: "qué", where: "dónde", when: "cuándo", why: "por qué", who: "quién",
   name: "nombre", my: "mi", your: "tu", is: "es", this: "esto", that: "eso", we: "nosotros",
@@ -270,10 +270,7 @@ function scheduleInterimCommitBySilence() {
   }, delay);
 }
 
-function shouldInstantRenderTypewriter(mode, target) {
-  if (mode === "transcript") {
-    return true;
-  }
+function shouldInstantRenderTypewriter(target) {
   var text = String(target || "");
   if (prefersReducedMotion) {
     return true;
@@ -1130,7 +1127,7 @@ function animateTypeInto(textarea, finalText, mode) {
     return;
   }
 
-  if (shouldInstantRenderTypewriter(mode, finalText)) {
+  if (shouldInstantRenderTypewriter(finalText)) {
     stopTypewriter(mode || "translation");
     state.raw = String(finalText || "");
     textarea.value = state.raw;
@@ -1556,7 +1553,10 @@ function estimateEsCoverage(text) {
     }
   }
 
-  return es / Math.max(1, (es + en));
+  if (es === 0 && en === 0) {
+    return 0.5;
+  }
+  return es / (es + en);
 }
 
 function countWords(text) {
@@ -2027,8 +2027,15 @@ async function startListening() {
   }
 
   initializeRecognitionInstance();
+  // BUG FIX: guarda null antes de .start() por si el constructor de SpeechRecognition
+  // lanzó excepción interna (edge case en algunos navegadores), evitando un TypeError.
+  if (!recognition) {
+    showError("No se pudo crear el motor de reconocimiento de voz.");
+    listeningRequested = false;
+    setStatus("error", "Error al inicializar");
+    return;
+  }
   bindRecognitionHandlers(recognition);
-
   recognition.start();
 }
 
@@ -2288,6 +2295,22 @@ function stopListening() {
 }
 
 function clearOutputs() {
+  // BUG FIX: aborta la traducción HTTP activa para que no sobreescriba los outputs
+  // ya limpiados cuando la respuesta llega unos ms después del clear.
+  if (activeTranslationController) {
+    try { activeTranslationController.abort(); } catch (_eClear) { /* ignorado */ }
+    activeTranslationController = null;
+  }
+  // BUG FIX: cancela los timers de debounce pendientes para evitar que peticiones
+  // encoladas con texto stale se disparen tras el clear.
+  if (translateDebounceTimer) {
+    clearTimeout(translateDebounceTimer);
+    translateDebounceTimer = null;
+  }
+  if (typedTranslateDebounceTimer) {
+    clearTimeout(typedTranslateDebounceTimer);
+    typedTranslateDebounceTimer = null;
+  }
   stopTypewriter("transcript");
   stopTypewriter("translation");
   clearInterimCommitTimer();

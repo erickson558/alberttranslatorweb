@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.5.27] - 2026-04-14
+### Fixed
+- Corregido el fallback PowerShell en `backend/http.php`: `$r` era interpolada como variable PHP vacía en string de dobles comillas, generando un script PowerShell inválido que fallaba silenciosamente en cada intento. Cambiado a comillas simples PHP para que `$r` llegue literal al intérprete de PowerShell.
+- Corregido el check de ratio en `translate_with_local_glossary()`: cuando se aplicaba una frase compuesta (phraseApplied=true), los tokens ya traducidos en el texto destino hacían que el ratio bajara artificialmente por debajo del umbral mínimo, descartando traducciones válidas como "one large pepperoni pizza please". El check de ratio ahora se omite cuando hubo al menos una sustitución de frase.
+- Corregido el endpoint de MyMemory en `translate_with_mymemory()`: URL cambiada de `http://` a `https://` para cifrar las peticiones de traducción en tránsito.
+- Corregida race condition en `clearOutputs()` (app.js): la función ahora aborta el AbortController de traducción activo y cancela `translateDebounceTimer` / `typedTranslateDebounceTimer` antes de limpiar los outputs, evitando que respuestas en vuelo sobreescriban el contenido ya borrado.
+- Corregida ausencia de guarda null en `startListening()` (app.js): si `initializeRecognitionInstance()` fallaba internamente, la llamada a `recognition.start()` lanzaba un TypeError no capturado. Ahora se verifica la instancia antes de continuar y se muestra un error descriptivo.
+
+### Changed
+- Synchronized version to V1.5.27 across VERSION, APP_VERSION, README, and CHANGELOG.
+
 ## [V1.5.26] - 2026-04-01
 ### Fixed
 - Evitado el estado colgado donde Chromium quedaba "activo pero mudo" cuando `stop()` no devolvia `onend`; ahora se escala a recuperacion profunda y se recrea la instancia.

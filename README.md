@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.26
+Version actual: V1.5.27
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 

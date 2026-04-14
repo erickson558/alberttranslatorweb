@@ -306,7 +306,13 @@ function translate_with_local_glossary($transcript, $source, $target)
     }
 
     $normalized = trim(preg_replace('/\s+/', ' ', $translated));
-    if ($wordCount > 0) {
+
+    // BUG FIX: cuando se aplicó al menos una frase compuesta (phraseApplied = true),
+    // el texto en $translated ya contiene tokens en el idioma destino. El ratio
+    // $translatedWords/$wordCount sería artificialmente bajo porque el bucle word-by-word
+    // no reconoce esos tokens ya traducidos como "palabras traducidas", devolviendo ''
+    // para traducciones perfectamente válidas. Se omite el check de ratio en ese caso.
+    if ($wordCount > 0 && !$phraseApplied) {
         $ratio = $translatedWords / $wordCount;
         // Evita traducciones parciales con mezcla excesiva de idiomas.
         $minRatio = $wordCount >= 10 ? 0.4 : 0.55;
@@ -462,7 +468,7 @@ function translate_with_google_chunked($transcript, $source, $target, &$detected
         }
 
         if (!is_effective_translation($chunk, $piece, $source, $target)) {
-            $piece = $chunk;
+            $piece = '';
         }
 
         $translatedParts[] = trim((string)$piece);
@@ -478,7 +484,9 @@ function translate_with_mymemory($transcript, $source, $target)
         'q' => $transcript,
         'langpair' => $fallbackSource . '|' . $target,
     ]);
-    $fallbackUrl = 'http://api.mymemory.translated.net/get?' . $fallbackQuery;
+    // BUG FIX: URL usaba http:// (sin cifrado). Cambiado a https:// para proteger
+    // el contenido de las peticiones de traducción en tránsito.
+    $fallbackUrl = 'https://api.mymemory.translated.net/get?' . $fallbackQuery;
 
     $fallbackCode = 0;
     $fallbackError = '';
