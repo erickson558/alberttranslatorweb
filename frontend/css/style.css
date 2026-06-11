@@ -51,6 +51,14 @@ body {
   }
 }
 
+/* Cabecera con fila flex para alinear título + botones de idioma/acción */
+.app-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
 .app-header h1 {
   margin: 0;
   font-size: 1.8rem;
@@ -60,6 +68,27 @@ body {
 .app-header p {
   margin: 0.45rem 0 0;
   color: var(--muted);
+}
+
+/* Botón de alternancia ES ↔ EN para el idioma de la interfaz */
+.lang-toggle-btn {
+  flex-shrink: 0;
+  padding: 0.38rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  border: 1px solid rgba(41, 182, 246, 0.55);
+  background: linear-gradient(120deg, rgba(41, 182, 246, 0.18), rgba(124, 77, 255, 0.18));
+  color: var(--accent);
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, transform .15s ease;
+}
+
+.lang-toggle-btn:hover {
+  background: linear-gradient(120deg, rgba(41, 182, 246, 0.34), rgba(124, 77, 255, 0.32));
+  border-color: rgba(41, 182, 246, 0.8);
+  transform: translateY(-1px);
 }
 
 .php-badge {
@@ -498,6 +527,49 @@ textarea.streaming {
 .app-footer {
   margin-top: 0.95rem;
   color: var(--muted);
+}
+
+/* Fila del footer: info API a la izquierda, botón de donación a la derecha */
+.footer-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/**
+ * Botón de donación "Cómprame una cerveza 🍺"
+ * Se renderiza como enlace <a> pero con apariencia de botón.
+ * Gradiente ámbar-naranja evoca la cerveza sin romper la paleta dark.
+ */
+.donate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.48rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 200, 87, 0.55);
+  background: linear-gradient(120deg, rgba(255, 200, 87, 0.22), rgba(255, 150, 50, 0.22));
+  color: #ffe8a0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, transform .15s ease, box-shadow .2s ease;
+  white-space: nowrap;
+}
+
+.donate-btn:hover {
+  background: linear-gradient(120deg, rgba(255, 200, 87, 0.4), rgba(255, 150, 50, 0.4));
+  border-color: rgba(255, 200, 87, 0.85);
+  box-shadow: 0 6px 18px rgba(255, 160, 30, 0.28);
+  transform: translateY(-2px);
+  color: #fff5c0;
+}
+
+.donate-btn:active {
+  transform: translateY(0);
 }
 
 .copy-toast {

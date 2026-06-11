@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.5.27
+Version actual: V1.6.0
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
@@ -22,6 +22,9 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
 - Permite exportar a TXT: ambos paneles, solo transcripcion o solo traduccion.
 - Deja preparado un fallback externo de streaming con token temporal en `/api/stt-stream-token.php` para integraciones futuras con proveedor gratuito.
+- Soporta cambio de idioma de interfaz (ES ↔ EN) con un clic, persistido en localStorage.
+- Incluye botón de donacion "Comprame una cerveza" vinculado a PayPal.
+- Optimizado en uso de RAM (cache LRU con limite de 80 entradas) y CPU (heartbeat adaptativo 1s activo / 4s reposo, pausa en tab oculto).
 
 ## Arquitectura
 

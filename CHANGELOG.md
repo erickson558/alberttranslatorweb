@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.6.0] - 2026-06-11
+### Added
+- Botón de donación "Cómprame una cerveza 🍺" en el footer con enlace a PayPal (hosted_button_id=ZABFRXC2P3JQN). Se abre en pestaña nueva para no interrumpir la sesión activa.
+- Soporte multiidioma de interfaz (ES ↔ EN): sistema i18n client-side con `UI_STRINGS`, función `i18n(key)`, atributos `data-i18n` / `data-i18n-ph` en todo el HTML y botón toggle `#ui-lang-toggle` en la cabecera. La preferencia se persiste en localStorage.
+- Agentes de Claude Code (.claude/agents/): `debugger`, `code-reviewer`, `release-manager` con contexto completo del proyecto.
+- Skills de Claude Code (.claude/commands/): `/fix-and-release`, `/comment-code`, `/github-push` con flujos paso a paso.
+- CLAUDE.md: contexto del proyecto para asistentes de IA con reglas críticas, arquitectura y comandos frecuentes.
+- SDD.md: documento de Spec Driven Development con RF, RNF, arquitectura, especificaciones de componentes, ADRs y checklist de features.
+
+### Fixed
+- **RAM leak crítico**: `segmentCache` en `translation-engine.js` crecía indefinidamente (Map sin límite). Implementado caché FIFO con `MAX_CACHE_SIZE = 80` y función `setCacheEntry()` que poda la entrada más antigua cuando el límite se supera.
+- **CPU en reposo**: heartbeat de la tira de estado cambiado de intervalo fijo 1 s a adaptativo: 1 s cuando el micrófono está activo, 4 s en reposo (reducción del 75% de ciclos de CPU cuando el usuario no transcribe).
+- **CPU con tab oculto**: el heartbeat ahora se pausa cuando `document.hidden === true` (visibilitychange) y se reanuda al volver al tab, eliminando actualizaciones innecesarias cuando la app está en segundo plano.
+- Mensajes de error y estado de la UI ahora pasan por `i18n()` en lugar de strings hardcodeados en español, garantizando consistencia con el idioma de interfaz activo.
+- `restartHeartbeat(false)` añadido en `stopListening()` y en el handler de `not-allowed`/`service-not-allowed` para garantizar la transición al modo lento en todos los paths de parada.
+
+### Changed
+- `translation-engine.js`: añadidos JSDoc completos a todas las funciones. Exportada `getCacheSize()` para diagnóstico.
+- `app.js`: módulo i18n completo al inicio del archivo (UI_STRINGS, i18n(), applyUiLanguage(), restoreUiLanguage(), toggleUiLanguage()).
+- `index.php`: refactorizado con `data-i18n` / `data-i18n-ph` en todos los elementos traducibles, nuevo bloque `.app-header-top` flex para alinear título + botón de idioma.
+- `style.css`: nuevos estilos para `.lang-toggle-btn`, `.footer-content`, `.donate-btn` y `.app-header-top`.
+- Versión sincronizada a V1.6.0 en VERSION, APP_VERSION, README y CHANGELOG.
+
 ## [V1.5.27] - 2026-04-14
 ### Fixed
 - Corregido el fallback PowerShell en `backend/http.php`: `$r` era interpolada como variable PHP vacía en string de dobles comillas, generando un script PowerShell inválido que fallaba silenciosamente en cada intento. Cambiado a comillas simples PHP para que `$r` llegue literal al intérprete de PowerShell.

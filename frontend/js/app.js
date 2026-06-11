@@ -1,3 +1,237 @@
+/**
+ * =============================================================================
+ * MÓDULO i18n — Internacionalización de la interfaz de usuario.
+ * Soporta Español (es) e Inglés (en). La preferencia se guarda en localStorage.
+ * Para agregar más idiomas: añadir entrada en UI_STRINGS y opción en el toggle.
+ * =============================================================================
+ */
+
+/** Clave de preferencia de idioma de UI en localStorage. */
+const UI_LANG_KEY = "albert_translator_ui_lang_v1";
+
+/** Idioma de UI activo. Inicializado en restoreUiLanguage(). */
+let currentUiLang = "es";
+
+/**
+ * Diccionario de traducciones de la UI.
+ * Las rutas con punto (ej. "status.idle") se resuelven en la función i18n().
+ */
+const UI_STRINGS = {
+  es: {
+    startListening:    "Iniciar escucha",
+    stopListening:     "Detener",
+    clear:             "Limpiar",
+    exportTxt:         "Exportar TXT",
+    savePreferences:   "Guardar preferencias",
+    swap:              "Intercambiar",
+    translateManual:   "Traducir texto",
+    copy:              "Copiar",
+    sourceLanguage:    "Idioma de origen",
+    targetLanguage:    "Idioma de destino",
+    provider:          "Modelo free en la nube",
+    profile:           "Perfil",
+    speed:             "Velocidad",
+    stagger:           "Stagger",
+    preciseLive:       "Vivo preciso",
+    fastLive:          "Vivo rápido",
+    watchdogVoice:     "Watchdog voz",
+    exportLegend:      "Exportar",
+    exportBoth:        "Ambos",
+    exportTranscript:  "Transcripción",
+    exportTranslation: "Traducción",
+    transcription:     "Transcripción",
+    translation:       "Traducción",
+    manualTranslation: "Traducción manual",
+    shortcuts:         "Atajos: Ctrl+Enter iniciar/detener · Ctrl+Backspace limpiar",
+    donate:            "Cómprame una cerveza 🍺",
+    toggleLang:        "EN",
+    status: {
+      idle:       "Inactivo",
+      listening:  "Escuchando en vivo",
+      processing: "Reconectando escucha...",
+      error:      "Error",
+    },
+    placeholders: {
+      transcript:  "La transcripción aparecerá aquí...",
+      translation: "La traducción aparecerá aquí...",
+      manual:      "Escribe o pega texto para traducir...",
+    },
+    errors: {
+      noSpeechApi:     "Tu navegador no soporta reconocimiento de voz Web Speech API.",
+      noRecognition:   "No se pudo crear el motor de reconocimiento de voz.",
+      initError:       "Error al inicializar",
+      micDenied:       "Permiso de micrófono denegado. Habilítalo y vuelve a intentar.",
+      micDeniedStatus: "Permiso de microfono denegado",
+      noTranslation:   "No se obtuvo una traducción confiable. Cambia el proveedor a Auto o Google Free e intenta de nuevo.",
+      noText:          "Escribe texto en traducción manual.",
+      noTranscript:    "No hay transcripción para exportar.",
+      noTranslationExp:"No hay traducción para exportar.",
+      noContent:       "No hay contenido para exportar.",
+      noCopy:          "No hay texto para copiar.",
+      noCopyClipboard: "No se pudo copiar al portapapeles.",
+      noSpeak:         "No hay texto para leer.",
+      noTts:           "Tu navegador no soporta lectura por voz.",
+      noSwap:          "No se puede intercambiar cuando origen esta en auto.",
+      noHealth:        "No se pudo validar API PHP.",
+      noConnection:    "No hay conexion con la API PHP.",
+    },
+    toasts: {
+      prefsSaved:        "Preferencias guardadas",
+      prefsRestored:     "Preferencias restauradas",
+      copied:            "Texto copiado",
+      copyFailed:        "No se pudo copiar",
+      exported:          "TXT exportado",
+      langChanged:       "Idioma de UI: English",
+    },
+  },
+  en: {
+    startListening:    "Start listening",
+    stopListening:     "Stop",
+    clear:             "Clear",
+    exportTxt:         "Export TXT",
+    savePreferences:   "Save preferences",
+    swap:              "Swap",
+    translateManual:   "Translate text",
+    copy:              "Copy",
+    sourceLanguage:    "Source language",
+    targetLanguage:    "Target language",
+    provider:          "Free cloud model",
+    profile:           "Profile",
+    speed:             "Speed",
+    stagger:           "Stagger",
+    preciseLive:       "Precise live",
+    fastLive:          "Fast live",
+    watchdogVoice:     "Voice watchdog",
+    exportLegend:      "Export",
+    exportBoth:        "Both",
+    exportTranscript:  "Transcript",
+    exportTranslation: "Translation",
+    transcription:     "Transcription",
+    translation:       "Translation",
+    manualTranslation: "Manual translation",
+    shortcuts:         "Shortcuts: Ctrl+Enter start/stop · Ctrl+Backspace clear",
+    donate:            "Buy me a beer 🍺",
+    toggleLang:        "ES",
+    status: {
+      idle:       "Idle",
+      listening:  "Listening live",
+      processing: "Reconnecting...",
+      error:      "Error",
+    },
+    placeholders: {
+      transcript:  "Transcription will appear here...",
+      translation: "Translation will appear here...",
+      manual:      "Type or paste text to translate...",
+    },
+    errors: {
+      noSpeechApi:     "Your browser does not support Web Speech API.",
+      noRecognition:   "Could not create speech recognition engine.",
+      initError:       "Init error",
+      micDenied:       "Microphone permission denied. Enable it and try again.",
+      micDeniedStatus: "Microphone permission denied",
+      noTranslation:   "No reliable translation found. Switch provider to Auto or Google Free and retry.",
+      noText:          "Enter text in manual translation.",
+      noTranscript:    "No transcription to export.",
+      noTranslationExp:"No translation to export.",
+      noContent:       "No content to export.",
+      noCopy:          "No text to copy.",
+      noCopyClipboard: "Could not copy to clipboard.",
+      noSpeak:         "No text to read aloud.",
+      noTts:           "Your browser does not support text-to-speech.",
+      noSwap:          "Cannot swap when source is set to auto.",
+      noHealth:        "Could not validate PHP API.",
+      noConnection:    "No connection to PHP API.",
+    },
+    toasts: {
+      prefsSaved:        "Preferences saved",
+      prefsRestored:     "Preferences restored",
+      copied:            "Text copied",
+      copyFailed:        "Could not copy",
+      exported:          "TXT exported",
+      langChanged:       "UI language: Español",
+    },
+  },
+};
+
+/**
+ * Obtiene la cadena traducida para la clave dada en el idioma de UI activo.
+ * Soporta rutas con punto (ej. "status.idle", "errors.noCopy").
+ * Si la clave no existe devuelve la clave misma para facilitar debugging.
+ * @param {string} key - Clave del diccionario (con o sin puntos).
+ * @returns {string}
+ */
+function i18n(key) {
+  var dict = UI_STRINGS[currentUiLang] || UI_STRINGS.es;
+  var parts = String(key || "").split(".");
+  var val = dict;
+  for (var idx = 0; idx < parts.length; idx += 1) {
+    if (val && typeof val === "object") {
+      val = val[parts[idx]];
+    } else {
+      return key;
+    }
+  }
+  return typeof val === "string" ? val : key;
+}
+
+/**
+ * Aplica el idioma de UI indicado actualizando el DOM.
+ * Busca elementos con data-i18n (textContent), data-i18n-ph (placeholder)
+ * y data-i18n-title (title) y sustituye sus valores con el diccionario.
+ * @param {string} lang - "es" o "en".
+ */
+function applyUiLanguage(lang) {
+  currentUiLang = (lang === "en") ? "en" : "es";
+
+  // Actualiza elementos por data-i18n (textContent).
+  document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    var key = el.getAttribute("data-i18n");
+    el.textContent = i18n(key);
+  });
+
+  // Actualiza placeholders de textareas e inputs.
+  document.querySelectorAll("[data-i18n-ph]").forEach(function (el) {
+    var key = el.getAttribute("data-i18n-ph");
+    el.placeholder = i18n(key);
+  });
+
+  // Actualiza atributo title.
+  document.querySelectorAll("[data-i18n-title]").forEach(function (el) {
+    var key = el.getAttribute("data-i18n-title");
+    el.title = i18n(key);
+  });
+
+  // Persiste la preferencia.
+  var ls = getSafeLocalStorage();
+  if (ls) {
+    try { ls.setItem(UI_LANG_KEY, currentUiLang); } catch (_e) {}
+  }
+}
+
+/**
+ * Lee la preferencia de idioma de UI guardada y la aplica.
+ * Fallback: español si no hay preferencia guardada.
+ */
+function restoreUiLanguage() {
+  var ls = getSafeLocalStorage();
+  var saved = "";
+  if (ls) {
+    try { saved = String(ls.getItem(UI_LANG_KEY) || ""); } catch (_e) {}
+  }
+  applyUiLanguage(saved === "en" ? "en" : "es");
+}
+
+/**
+ * Alterna el idioma de la UI entre "es" y "en" y muestra un toast de confirmación.
+ */
+function toggleUiLanguage() {
+  var next = currentUiLang === "es" ? "en" : "es";
+  applyUiLanguage(next);
+  showToast(i18n("toasts.langChanged"), "ok");
+}
+
+// =============================================================================
+
 const COMMON_LANGUAGES = [
   { name: "Español", code: "es" },
   { name: "Inglés", code: "en" },
@@ -118,6 +352,15 @@ const WATCHDOG_POLL_INTERVAL_MS = 5000;
 const WATCHDOG_ROLLING_REFRESH_MS = 45000;
 const WATCHDOG_REFRESH_IDLE_MS = 1500;
 const RECOGNITION_END_WAIT_MS = 1600;
+
+/**
+ * Intervalos del heartbeat de la tira de estado en tiempo real.
+ * Cuando el micrófono está activo se usa el intervalo rápido (1 s) para que
+ * el contador "última voz hace Xs" sea preciso. En reposo se reduce a 4 s para
+ * ahorrar CPU (~75% menos ciclos que el intervalo fijo anterior de 1 s).
+ */
+const HEARTBEAT_IDLE_MS   = 4000;
+const HEARTBEAT_ACTIVE_MS = 1000;
 const typewriterStates = {
   transcript: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
   translation: { timer: null, target: "", running: false, raw: "", cursorOn: false, cursorTimer: null, textarea: null },
@@ -152,6 +395,7 @@ const LOCAL_GLOSSARY_ES_EN = (function () {
 })();
 
 buildLanguageOptions();
+restoreUiLanguage();    // Aplica idioma de UI antes de cargar otras prefs.
 restoreUiPreferences();
 wireEvents();
 initSpeechUnloadGuards();
@@ -176,15 +420,39 @@ function initSpeechUnloadGuards() {
   });
 }
 
+/**
+ * Reinicia el intervalo del heartbeat con la frecuencia correcta según el estado.
+ * active=true  → 1 s (micrófono activo, contadores de tiempo críticos).
+ * active=false → 4 s (reposo, reduce CPU un 75% frente al intervalo anterior).
+ * Se pausa automáticamente cuando el tab está oculto (document.hidden) para no
+ * consumir CPU cuando el usuario no está mirando la pantalla.
+ * @param {boolean} active
+ */
+function restartHeartbeat(active) {
+  if (runtimeHeartbeatTimer) {
+    clearInterval(runtimeHeartbeatTimer);
+    runtimeHeartbeatTimer = null;
+  }
+  var interval = active ? HEARTBEAT_ACTIVE_MS : HEARTBEAT_IDLE_MS;
+  runtimeHeartbeatTimer = setInterval(function () {
+    if (!document.hidden) {
+      updateRuntimeStrip();
+    }
+  }, interval);
+}
+
 function initRuntimeEnhancements() {
   prefersReducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   updateRuntimeStrip();
-  if (runtimeHeartbeatTimer) {
-    clearInterval(runtimeHeartbeatTimer);
-  }
-  runtimeHeartbeatTimer = setInterval(function () {
-    updateRuntimeStrip();
-  }, 1000);
+  restartHeartbeat(false);
+
+  // Pausa el heartbeat cuando el tab pasa a segundo plano y lo reanuda al volver.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) {
+      updateRuntimeStrip();
+      restartHeartbeat(listeningRequested && listening);
+    }
+  });
 }
 
 function clearInterimCommitTimer() {
@@ -445,6 +713,12 @@ function wireEvents() {
   if (exportTxtBtn) {
     exportTxtBtn.addEventListener("click", exportConversationToTxt);
   }
+
+  // Botón de alternancia de idioma de UI (ES ↔ EN).
+  var uiLangToggle = document.getElementById("ui-lang-toggle");
+  if (uiLangToggle) {
+    uiLangToggle.addEventListener("click", toggleUiLanguage);
+  }
   if (exportScopeRadios && exportScopeRadios.length) {
     for (var exportIndex = 0; exportIndex < exportScopeRadios.length; exportIndex += 1) {
       exportScopeRadios[exportIndex].addEventListener("change", persistUiPreferences);
@@ -456,10 +730,11 @@ function wireEvents() {
   if (savePreferencesBtn) {
     savePreferencesBtn.addEventListener("click", function () {
       persistUiPreferences();
-      setStatus("idle", "Preferencias guardadas");
+      showToast(i18n("toasts.prefsSaved"), "ok");
+      setStatus("idle", i18n("toasts.prefsSaved"));
       setTimeout(function () {
         if (!listening) {
-          setStatus("idle", "Listo");
+          setStatus("idle", i18n("status.idle"));
         }
       }, 1100);
     });
@@ -499,7 +774,7 @@ function wireEvents() {
   translateManualBtn.addEventListener("click", function () {
     var text = String(manualInput.value || "").trim();
     if (!text) {
-      showError("Escribe texto en traducción manual.");
+      showError(i18n("errors.noText"));
       return;
     }
     runManualTranslation(text);
@@ -673,7 +948,7 @@ function restoreUiPreferences() {
     if (!uiPrefsWereRestored) {
       return;
     }
-    showToast("Preferencias restauradas", "ok");
+    showToast(i18n("toasts.prefsRestored"), "ok");
   }, 80);
 }
 
@@ -1592,7 +1867,7 @@ async function processTranscript(text, fromManual, mode) {
   var translationMode = "replace";
 
   if (fromManual) {
-    setStatus("processing", "Traduciendo...");
+    setStatus("processing", i18n("status.processing"));
   }
   showError("");
 
@@ -1731,7 +2006,7 @@ async function processTranscript(text, fromManual, mode) {
 
     if (!shouldAcceptTranslation(text, translatedText, srcCode, tgtCode)) {
       if (fromManual) {
-        throw new Error("No se obtuvo una traducción confiable. Cambia el proveedor a Auto o Google Free e intenta de nuevo.");
+        throw new Error(i18n("errors.noTranslation"));
       }
       setStatus(listening ? "listening" : "idle", listening ? "Escuchando en vivo" : "Listo");
       return;
@@ -1846,12 +2121,12 @@ async function checkHealth() {
   try {
     var response = await fetch(BASE + "/api/health.php", { cache: "no-store" });
     if (!response.ok) {
-      showError("No se pudo validar API PHP.");
+      showError(i18n("errors.noHealth"));
       return;
     }
-    setStatus("idle", "Listo");
+    setStatus("idle", i18n("status.idle"));
   } catch (_e) {
-    showError("No hay conexion con la API PHP.");
+    showError(i18n("errors.noConnection"));
   }
 }
 
@@ -1875,10 +2150,12 @@ function bindRecognitionHandlers(recognitionInstance) {
     recognitionSessionStartedAt = Date.now();
     startRecognitionWatchdog();
     listening = true;
+    // Acelera el heartbeat a 1 s para que los contadores de tiempo sean precisos.
+    restartHeartbeat(true);
     startBtn.disabled = true;
     stopBtn.disabled = false;
     showError("");
-    setStatus("listening", "Escuchando en vivo");
+    setStatus("listening", i18n("status.listening"));
   };
 
   recognitionInstance.onerror = function (event) {
@@ -1905,10 +2182,11 @@ function bindRecognitionHandlers(recognitionInstance) {
       clearRecognitionRestartTimer();
       resetRecognitionRestartPending();
       listening = false;
+      restartHeartbeat(false);
       startBtn.disabled = false;
       stopBtn.disabled = true;
-      setStatus("error", "Permiso de microfono denegado");
-      showError("Permiso de micrófono denegado. Habilítalo y vuelve a intentar.");
+      setStatus("error", i18n("errors.micDeniedStatus"));
+      showError(i18n("errors.micDenied"));
       return;
     }
 
@@ -1935,11 +2213,13 @@ function bindRecognitionHandlers(recognitionInstance) {
     listening = false;
     stopRecognitionWatchdog();
     if (!listeningRequested) {
+      // Vuelve al heartbeat lento al detenerse para ahorrar CPU.
+      restartHeartbeat(false);
       startBtn.disabled = false;
       stopBtn.disabled = true;
       transcriptOutput.classList.remove("streaming");
       resetRecognitionRestartPending();
-      setStatus("idle", "Inactivo");
+      setStatus("idle", i18n("status.idle"));
       return;
     }
 
@@ -2007,7 +2287,7 @@ function bindRecognitionHandlers(recognitionInstance) {
 async function startListening() {
   showError("");
   if (!SpeechRecognitionCtor) {
-    showError("Tu navegador no soporta reconocimiento de voz Web Speech API.");
+    showError(i18n("errors.noSpeechApi"));
     return;
   }
 
@@ -2030,9 +2310,9 @@ async function startListening() {
   // BUG FIX: guarda null antes de .start() por si el constructor de SpeechRecognition
   // lanzó excepción interna (edge case en algunos navegadores), evitando un TypeError.
   if (!recognition) {
-    showError("No se pudo crear el motor de reconocimiento de voz.");
+    showError(i18n("errors.noRecognition"));
     listeningRequested = false;
-    setStatus("error", "Error al inicializar");
+    setStatus("error", i18n("errors.initError"));
     return;
   }
   bindRecognitionHandlers(recognition);
@@ -2198,7 +2478,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
   clearRecognitionRestartTimer();
   stopRecognitionWatchdog();
   showError("");
-  setStatus("processing", "Reconectando escucha...");
+  setStatus("processing", i18n("status.processing"));
 
   var maxAttempts = 14;
   var backoff = Math.min(1800, Math.max(120, Number(delayMs || 180)) + (recognitionRestartAttempts - 1) * 120);
@@ -2269,6 +2549,7 @@ function stopListening() {
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
   clearRecognitionRestartTimer();
+  restartHeartbeat(false);
   recognitionRestartAttempts = 0;
   resetLiveEnqueueState();
   if (livePreviewDelayTimer) {
@@ -2345,12 +2626,12 @@ function clearOutputs() {
   }
   manualInput.value = "";
   showError("");
-  setStatus("idle", "Inactivo");
+  setStatus("idle", i18n("status.idle"));
 }
 
 function swapLanguages() {
   if (sourceSelect.value === "auto") {
-    showError("No se puede intercambiar cuando origen esta en auto.");
+    showError(i18n("errors.noSwap"));
     return;
   }
 
@@ -2437,20 +2718,20 @@ function exportConversationToTxt() {
   var translation = stripVisualCursor(translationOutput ? translationOutput.value : "");
 
   if (scope === "transcript" && !transcript) {
-    showError("No hay transcripción para exportar.");
-    showToast("No hay transcripción para exportar", "warn");
+    showError(i18n("errors.noTranscript"));
+    showToast(i18n("errors.noTranscript"), "warn");
     return;
   }
 
   if (scope === "translation" && !translation) {
-    showError("No hay traducción para exportar.");
-    showToast("No hay traducción para exportar", "warn");
+    showError(i18n("errors.noTranslationExp"));
+    showToast(i18n("errors.noTranslationExp"), "warn");
     return;
   }
 
   if (scope === "both" && !transcript && !translation) {
-    showError("No hay contenido para exportar.");
-    showToast("No hay contenido para exportar", "warn");
+    showError(i18n("errors.noContent"));
+    showToast(i18n("errors.noContent"), "warn");
     return;
   }
 
@@ -2486,7 +2767,7 @@ function exportConversationToTxt() {
   URL.revokeObjectURL(url);
 
   showError("");
-  showToast("TXT exportado", "ok");
+  showToast(i18n("toasts.exported"), "ok");
 }
 
 function stripVisualCursor(value) {
@@ -2496,12 +2777,12 @@ function stripVisualCursor(value) {
 function speakText(value, lang) {
   var text = stripVisualCursor(value);
   if (!text) {
-    showError("No hay texto para leer.");
+    showError(i18n("errors.noSpeak"));
     return;
   }
 
   if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
-    showError("Tu navegador no soporta lectura por voz.");
+    showError(i18n("errors.noTts"));
     return;
   }
 
@@ -2516,16 +2797,16 @@ function speakText(value, lang) {
 async function copyText(value) {
   var text = stripVisualCursor(value);
   if (!text) {
-    showError("No hay texto para copiar.");
-    showToast("No hay texto para copiar", "warn");
+    showError(i18n("errors.noCopy"));
+    showToast(i18n("errors.noCopy"), "warn");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(text);
-    showToast("Texto copiado", "ok");
+    showToast(i18n("toasts.copied"), "ok");
   } catch (_e) {
-    showError("No se pudo copiar al portapapeles.");
-    showToast("No se pudo copiar", "warn");
+    showError(i18n("errors.noCopyClipboard"));
+    showToast(i18n("toasts.copyFailed"), "warn");
   }
 }
