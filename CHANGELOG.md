@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.6.6] - 2026-09-11
+### Fixed
+- **"Al detener se congela el sitio (botones/estado pegados) y sigue sin transcribir, igual en Chromium y en Google Chrome"**: al confirmarse que el problema ocurre igual en Chrome oficial (con soporte completo de Web Speech API), se descarta la limitación de Chromium como causa y se corrige lo que sí es controlable desde el código:
+  - `stopListening()` ahora restaura la UI a "Inactivo" de inmediato (botones, `listening=false`, clase `streaming` removida) sin esperar al evento `onend`, que en sesiones donde el reconocimiento arrancó pero nunca produjo resultados ni finalizó puede no llegar nunca, dejando la interfaz "pegada" en estado "Escuchando".
+  - Se deshabilita el reconocimiento on-device (`SpeechRecognition.available()/.install()/processLocally`) en `ensureLocalRecognitionReady()`, forzando siempre el reconocimiento remoto estándar. Esta característica experimental ya causó un cuelgue confirmado (V1.6.3) y este proyecto ya había revertido un intento previo de transcripción local por inestabilidad (tag huérfano V1.6.1); en redes corporativas/restringidas el modelo local puede quedar a medio instalar o comportarse de forma no confiable sin ningún error visible. Se eliminó el código ahora inalcanzable (`raceWithTimeout()`, `LOCAL_RECOGNITION_READY_TIMEOUT_MS`, `recognitionLocalSupportCache`).
+- Verificado con pruebas en navegador real (Chromium headless): ciclo completo de iniciar/detener sin quedar colgado, traducción manual sigue funcionando igual. `node tests/transcription_engine_merge_cases.js` sigue en verde.
+- **Nota**: si tras este cambio la transcripción en vivo sigue sin producir resultados en el navegador real, lo más probable es que la red (firewall/proxy corporativo) esté bloqueando el acceso al servicio de reconocimiento de voz en la nube de Google — esto no es corregible desde el código de la aplicación.
+
+### Changed
+- Versión sincronizada a V1.6.6 en VERSION, APP_VERSION, README y CHANGELOG.
+
 ## [V1.6.5] - 2026-09-11
 ### Fixed
 - **Causa raíz de "no puedo detener, el botón detener no funciona"**: en `frontend/js/app.js`, `startBtn`/`stopBtn` solo cambiaban de estado (`startBtn.disabled = true` / `stopBtn.disabled = false`) dentro del handler `onstart`. Mientras la app estaba en la fase "Iniciando escucha..." (antes de que `onstart` se disparara, lo que puede tardar segundos o colgarse indefinidamente en navegadores sin backend real de Web Speech API), el botón "Detener" permanecía deshabilitado y el usuario no tenía forma de cancelar manualmente. Además, si el usuario llegaba a cancelar durante la espera de `ensureLocalRecognitionReady()`, el código no verificaba `listeningRequested` al reanudar tras el `await`, por lo que el micrófono arrancaba de todas formas. Se corrigió: (1) `startListening()` ahora habilita "Detener"/deshabilita "Iniciar" desde el primer clic, no solo tras `onstart`; (2) se agregó una verificación de `listeningRequested` justo después de `ensureLocalRecognitionReady()` que aborta el arranque si el usuario ya canceló; (3) `stopListening()` ahora restaura directamente los botones y el estado a "Inactivo" cuando `listening` sigue en `false` (el reconocimiento nunca confirmó su arranque), en vez de depender de un evento `onend` que puede no llegar nunca.

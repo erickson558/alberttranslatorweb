@@ -343,7 +343,6 @@ let recognitionSessionStartedAt = 0;
 let recognitionRestartPendingSince = 0;
 let recognitionRestartPendingReason = "";
 let recognitionUseLocalProcessing = false;
-let recognitionLocalSupportCache = {};
 let incrementalSourceSegments = [];
 let incrementalTranslatedSegments = [];
 let incrementalContextKey = "";
@@ -995,96 +994,16 @@ function isAwaitingRecognitionEnd(reason) {
   return /await-end/.test(String(reason || "").toLowerCase());
 }
 
-/**
- * BUG FIX: en navegadores que exponen SpeechRecognition.available()/install()
- * (on-device speech recognition), install() puede tardar minutos en descargar
- * el modelo local -o no resolver nunca si la red bloquea la descarga- porque
- * es una llamada real al navegador, no simulable ni cancelable desde la página.
- * Sin límite, startListening() quedaba esperando esta promesa para siempre y
- * el micrófono real jamás llegaba a arrancar (la transcripción no aparecía,
- * aunque el usuario sí hablara). Se acota con un timeout para garantizar que
- * el arranque real del micrófono nunca se bloquee indefinidamente.
- */
-const LOCAL_RECOGNITION_READY_TIMEOUT_MS = 4000;
-
-function raceWithTimeout(promise, ms) {
-  return new Promise(function (resolve, reject) {
-    var settled = false;
-    var timer = setTimeout(function () {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      reject(new Error("local-recognition-timeout"));
-    }, ms);
-
-    Promise.resolve(promise).then(
-      function (value) {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      },
-      function (err) {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
 async function ensureLocalRecognitionReady(languageCode) {
-  if (
-    !SpeechRecognitionCtor
-    || typeof SpeechRecognitionCtor.available !== "function"
-    || typeof SpeechRecognitionCtor.install !== "function"
-  ) {
-    return false;
-  }
-
-  var lang = resolveRecognitionLang(languageCode);
-  if (Object.prototype.hasOwnProperty.call(recognitionLocalSupportCache, lang)) {
-    return recognitionLocalSupportCache[lang] === true;
-  }
-
-  try {
-    var availability = await raceWithTimeout(
-      SpeechRecognitionCtor.available({
-        langs: [lang],
-        processLocally: true,
-      }),
-      LOCAL_RECOGNITION_READY_TIMEOUT_MS
-    );
-
-    if (availability === "available") {
-      recognitionLocalSupportCache[lang] = true;
-      return true;
-    }
-
-    if (availability === "downloadable" || availability === "downloading") {
-      setStatus("processing", "Preparando reconocimiento local...");
-      var installed = await raceWithTimeout(
-        SpeechRecognitionCtor.install({
-          langs: [lang],
-          processLocally: true,
-        }),
-        LOCAL_RECOGNITION_READY_TIMEOUT_MS
-      );
-      recognitionLocalSupportCache[lang] = installed === true;
-      return recognitionLocalSupportCache[lang];
-    }
-  } catch (_e) {
-    // Si el navegador no soporta, falla la instalacion, o excede el tiempo de
-    // espera (modelo aun descargandose en segundo plano), sigue con modo remoto.
-  }
-
-  recognitionLocalSupportCache[lang] = false;
+  // BUG FIX: el reconocimiento on-device (available()/install()/processLocally)
+  // ya causó un cuelgue confirmado (V1.6.3) y este proyecto ya tuvo que revertir
+  // un intento anterior de transcripción local por inestabilidad (ver tag
+  // huérfano V1.6.1). En redes corporativas/restringidas el modelo local puede
+  // quedar a medio instalar o funcionar de forma no confiable sin producir
+  // ningún error visible. Se deshabilita para forzar siempre el reconocimiento
+  // remoto (el camino estándar y probado) hasta confirmar que el on-device es
+  // estable en este entorno.
+  void languageCode;
   return false;
 }
 
@@ -2689,15 +2608,18 @@ function stopListening() {
   clearRecognitionRestartTimer();
   restartHeartbeat(false);
 
-  // BUG FIX: si el reconocimiento nunca llegó a confirmar su arranque (onstart
-  // jamás se disparó — típico en navegadores sin backend real de Web Speech
-  // API), no hay que esperar a "onend" para restaurar la UI: ese evento puede
-  // no llegar nunca y el botón "Detener" quedaría con el estado congelado.
-  if (!listening) {
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    setStatus("idle", i18n("status.idle"));
-  }
+  // BUG FIX: restaura la UI a "Inactivo" de inmediato al presionar "Detener",
+  // sin esperar a que el motor dispare "onend". En algunos entornos (red que
+  // bloquea el servicio de reconocimiento en la nube, motor que arrancó pero
+  // nunca produjo resultados ni fin de sesión) ese evento puede tardar mucho
+  // o no llegar nunca, dejando los botones/estado "pegados" en "Escuchando".
+  // Si "onend" sí llega después, vuelve a aplicar el mismo estado idle sin
+  // efectos secundarios (es idempotente).
+  listening = false;
+  transcriptOutput.classList.remove("streaming");
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  setStatus("idle", i18n("status.idle"));
   recognitionRestartAttempts = 0;
   resetLiveEnqueueState();
   if (livePreviewDelayTimer) {
