@@ -74,6 +74,8 @@ const UI_STRINGS = {
       noSwap:          "No se puede intercambiar cuando origen esta en auto.",
       noHealth:        "No se pudo validar API PHP.",
       noConnection:    "No hay conexion con la API PHP.",
+      startTimeout:       "El reconocimiento de voz no respondió al iniciar. Prueba con Google Chrome o Microsoft Edge (soporte oficial de Web Speech API) y revisa el permiso de micrófono en el navegador/sistema operativo.",
+      startTimeoutStatus:"Tiempo de espera agotado al iniciar",
     },
     toasts: {
       prefsSaved:        "Preferencias guardadas",
@@ -141,6 +143,8 @@ const UI_STRINGS = {
       noSwap:          "Cannot swap when source is set to auto.",
       noHealth:        "Could not validate PHP API.",
       noConnection:    "No connection to PHP API.",
+      startTimeout:       "Speech recognition did not respond when starting. Try Google Chrome or Microsoft Edge (official Web Speech API support) and check the microphone permission in your browser/OS.",
+      startTimeoutStatus:"Startup timed out",
     },
     toasts: {
       prefsSaved:        "Preferences saved",
@@ -328,6 +332,7 @@ let toastTimer = null;
 let toastEl = null;
 let recognitionRestartTimer = null;
 let recognitionWatchdogTimer = null;
+let recognitionStartWatchdogTimer = null;
 let recognitionRestartAttempts = 0;
 let recognitionLastResultAt = 0;
 let recognitionLastEventAt = 0;
@@ -352,6 +357,10 @@ const WATCHDOG_POLL_INTERVAL_MS = 5000;
 const WATCHDOG_ROLLING_REFRESH_MS = 45000;
 const WATCHDOG_REFRESH_IDLE_MS = 1500;
 const RECOGNITION_END_WAIT_MS = 1600;
+// Algunos builds de Chromium (sin el backend propietario de Web Speech API) nunca
+// disparan onstart/onerror/onend tras recognition.start(): sin este timeout la UI
+// queda colgada en "Iniciando escucha..." para siempre.
+const RECOGNITION_START_TIMEOUT_MS = 6500;
 
 /**
  * Intervalos del heartbeat de la tira de estado en tiempo real.
@@ -2187,6 +2196,7 @@ function bindRecognitionHandlers(recognitionInstance) {
   }
 
   recognitionInstance.onstart = function () {
+    clearRecognitionStartWatchdog();
     clearRecognitionRestartTimer();
     resetRecognitionRestartPending();
     if (livePreviewDelayTimer) {
@@ -2210,6 +2220,7 @@ function bindRecognitionHandlers(recognitionInstance) {
   };
 
   recognitionInstance.onerror = function (event) {
+    clearRecognitionStartWatchdog();
     recognitionLastEventAt = Date.now();
     var code = String(event && event.error ? event.error : "desconocido");
 
@@ -2252,6 +2263,7 @@ function bindRecognitionHandlers(recognitionInstance) {
   };
 
   recognitionInstance.onend = function () {
+    clearRecognitionStartWatchdog();
     recognitionLastEventAt = Date.now();
     clearInterimCommitTimer();
     commitPendingInterim("onend");
@@ -2368,6 +2380,7 @@ async function startListening() {
   }
   bindRecognitionHandlers(recognition);
   recognition.start();
+  armRecognitionStartWatchdog();
 }
 
 function initializeRecognitionInstance() {
@@ -2407,6 +2420,66 @@ function stopRecognitionWatchdog() {
     clearInterval(recognitionWatchdogTimer);
     recognitionWatchdogTimer = null;
   }
+}
+
+function clearRecognitionStartWatchdog() {
+  if (recognitionStartWatchdogTimer) {
+    clearTimeout(recognitionStartWatchdogTimer);
+    recognitionStartWatchdogTimer = null;
+  }
+}
+
+/**
+ * Arma un timeout de arranque tras recognition.start(). En builds de Chromium sin
+ * el backend propietario de Web Speech API, .start() puede no disparar jamás
+ * onstart/onerror/onend: sin este watchdog la UI queda colgada en "Iniciando
+ * escucha..." indefinidamente. Se cancela solo desde onstart/onerror/onend
+ * (cualquier evento real del motor indica que ya no está "silenciado").
+ */
+function armRecognitionStartWatchdog() {
+  clearRecognitionStartWatchdog();
+  recognitionStartWatchdogTimer = setTimeout(handleRecognitionStartTimeout, RECOGNITION_START_TIMEOUT_MS);
+}
+
+function handleRecognitionStartTimeout() {
+  recognitionStartWatchdogTimer = null;
+  if (listening || !listeningRequested) {
+    return;
+  }
+
+  var stuckRecognition = recognition;
+  recognition = null;
+  listening = false;
+  listeningRequested = false;
+  stopRecognitionWatchdog();
+  clearRecognitionRestartTimer();
+  resetRecognitionRestartPending();
+
+  if (stuckRecognition) {
+    try {
+      stuckRecognition.onstart = null;
+      stuckRecognition.onresult = null;
+      stuckRecognition.onerror = null;
+      stuckRecognition.onend = null;
+    } catch (_eUnbind) {
+      // Ignorado.
+    }
+    try {
+      if (typeof stuckRecognition.abort === "function") {
+        stuckRecognition.abort();
+      } else {
+        stuckRecognition.stop();
+      }
+    } catch (_eStop) {
+      // Ignorado: la instancia ya esta colgada, el objetivo es solo descartarla.
+    }
+  }
+
+  restartHeartbeat(false);
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  setStatus("error", i18n("errors.startTimeoutStatus"));
+  showError(i18n("errors.startTimeout"));
 }
 
 function startRecognitionWatchdog() {
@@ -2599,6 +2672,7 @@ function stopListening() {
   resetRecognitionRestartPending();
   clearInterimCommitTimer();
   stopRecognitionWatchdog();
+  clearRecognitionStartWatchdog();
   clearRecognitionRestartTimer();
   restartHeartbeat(false);
   recognitionRestartAttempts = 0;
