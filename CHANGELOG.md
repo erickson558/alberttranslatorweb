@@ -4,13 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
-## [V1.6.1] - 2026-09-11
+## [V1.6.2] - 2026-09-11
 ### Fixed
 - **Causa raíz de "la traducción en vivo ya no se actualiza"**: la extensión cURL de PHP en este entorno EasyPHP/Windows no tiene configurado un `cacert.pem` válido (`openssl.cafile`/`curl.cainfo` vacíos), por lo que **todas** las peticiones HTTPS a los proveedores de traducción (Google Translate free, LibreTranslate, MyMemory) fallaban en `http_get_remote()` con `SSL certificate problem: unable to get local issuer certificate`. La app quedaba silenciosamente reducida al glosario local de ~150 palabras (`translate_with_local_glossary`), por lo que solo frases hechas enteramente de esas palabras (p.ej. "how are you today") parecían traducirse, y cualquier oración real la dejaba vacía. `backend/http.php`: cuando la petición vía `curl_init` de PHP falla por error de red/SSL, ahora se reintenta automáticamente con `curl.exe` (CLI) y PowerShell —los mismos fallbacks que ya existían para cuando la extensión cURL no está disponible—, sin desactivar la verificación de certificados en ningún punto.
 - **Caché de traducción envenenado por fallos**: en `translation-engine.js`, `translateByPhrases()` guardaba en `segmentCache` incluso el resultado `""` cuando todos los proveedores fallaban para un segmento. Eso dejaba esa frase exacta permanentemente sin traducir durante el resto de la sesión (hasta purgarse por FIFO), aunque una petición posterior sí hubiera podido tener éxito. Ahora solo se cachean resultados no vacíos; los fallos no se persisten y cada intento futuro vuelve a golpear la red.
 
 ### Changed
-- Versión sincronizada a V1.6.1 en VERSION, APP_VERSION, README y CHANGELOG.
+- Versión sincronizada a V1.6.2 en VERSION, APP_VERSION, README y CHANGELOG.
 
 ## [V1.6.0] - 2026-06-11
 ### Added
