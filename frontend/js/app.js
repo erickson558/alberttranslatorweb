@@ -986,6 +986,50 @@ function isAwaitingRecognitionEnd(reason) {
   return /await-end/.test(String(reason || "").toLowerCase());
 }
 
+/**
+ * BUG FIX: en navegadores que exponen SpeechRecognition.available()/install()
+ * (on-device speech recognition), install() puede tardar minutos en descargar
+ * el modelo local -o no resolver nunca si la red bloquea la descarga- porque
+ * es una llamada real al navegador, no simulable ni cancelable desde la página.
+ * Sin límite, startListening() quedaba esperando esta promesa para siempre y
+ * el micrófono real jamás llegaba a arrancar (la transcripción no aparecía,
+ * aunque el usuario sí hablara). Se acota con un timeout para garantizar que
+ * el arranque real del micrófono nunca se bloquee indefinidamente.
+ */
+const LOCAL_RECOGNITION_READY_TIMEOUT_MS = 4000;
+
+function raceWithTimeout(promise, ms) {
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error("local-recognition-timeout"));
+    }, ms);
+
+    Promise.resolve(promise).then(
+      function (value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      function (err) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 async function ensureLocalRecognitionReady(languageCode) {
   if (
     !SpeechRecognitionCtor
@@ -1001,10 +1045,13 @@ async function ensureLocalRecognitionReady(languageCode) {
   }
 
   try {
-    var availability = await SpeechRecognitionCtor.available({
-      langs: [lang],
-      processLocally: true,
-    });
+    var availability = await raceWithTimeout(
+      SpeechRecognitionCtor.available({
+        langs: [lang],
+        processLocally: true,
+      }),
+      LOCAL_RECOGNITION_READY_TIMEOUT_MS
+    );
 
     if (availability === "available") {
       recognitionLocalSupportCache[lang] = true;
@@ -1013,15 +1060,19 @@ async function ensureLocalRecognitionReady(languageCode) {
 
     if (availability === "downloadable" || availability === "downloading") {
       setStatus("processing", "Preparando reconocimiento local...");
-      var installed = await SpeechRecognitionCtor.install({
-        langs: [lang],
-        processLocally: true,
-      });
+      var installed = await raceWithTimeout(
+        SpeechRecognitionCtor.install({
+          langs: [lang],
+          processLocally: true,
+        }),
+        LOCAL_RECOGNITION_READY_TIMEOUT_MS
+      );
       recognitionLocalSupportCache[lang] = installed === true;
       return recognitionLocalSupportCache[lang];
     }
   } catch (_e) {
-    // Si el navegador no soporta o falla la instalacion, sigue con modo remoto.
+    // Si el navegador no soporta, falla la instalacion, o excede el tiempo de
+    // espera (modelo aun descargandose en segundo plano), sigue con modo remoto.
   }
 
   recognitionLocalSupportCache[lang] = false;
