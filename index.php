@@ -176,6 +176,16 @@ $jsVersion  = @filemtime(__DIR__ . '/frontend/js/app.js');
     <!-- ===== CAJA DE ERRORES (oculta por defecto) ===== -->
     <p id="error-box" class="error-box" hidden></p>
 
+    <!-- ===== PANEL DE DIAGNÓSTICO (para reportar problemas de reconocimiento de voz) ===== -->
+    <details id="diagnostics-panel" class="pane diagnostics-panel">
+      <summary data-i18n="diagnosticsTitle">Diagnóstico técnico (para reportar problemas de voz)</summary>
+      <div class="pane-actions diagnostics-actions">
+        <button id="copy-diagnostics" type="button" class="action-btn" data-i18n="copy">Copiar</button>
+        <button id="clear-diagnostics" type="button" class="action-btn" data-i18n="diagnosticsClear">Limpiar</button>
+      </div>
+      <textarea id="diagnostics-output" class="diagnostics-output" readonly data-i18n-ph="placeholders.diagnostics" placeholder="Aquí aparecerán eventos técnicos (arranque, errores, resultados) del reconocimiento de voz..."></textarea>
+    </details>
+
     <!-- ===== PIE DE PÁGINA ===== -->
     <footer class="app-footer">
       <div class="footer-content">

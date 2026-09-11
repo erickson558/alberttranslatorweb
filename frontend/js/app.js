@@ -42,6 +42,8 @@ const UI_STRINGS = {
     transcription:     "Transcripción",
     translation:       "Traducción",
     manualTranslation: "Traducción manual",
+    diagnosticsTitle:  "Diagnóstico técnico (para reportar problemas de voz)",
+    diagnosticsClear:  "Limpiar",
     shortcuts:         "Atajos: Ctrl+Enter iniciar/detener · Ctrl+Backspace limpiar",
     donate:            "Cómprame una cerveza 🍺",
     toggleLang:        "EN",
@@ -55,6 +57,7 @@ const UI_STRINGS = {
       transcript:  "La transcripción aparecerá aquí...",
       translation: "La traducción aparecerá aquí...",
       manual:      "Escribe o pega texto para traducir...",
+      diagnostics: "Aquí aparecerán eventos técnicos (arranque, errores, resultados) del reconocimiento de voz...",
     },
     errors: {
       noSpeechApi:     "Tu navegador no soporta reconocimiento de voz Web Speech API.",
@@ -111,6 +114,8 @@ const UI_STRINGS = {
     transcription:     "Transcription",
     translation:       "Translation",
     manualTranslation: "Manual translation",
+    diagnosticsTitle:  "Technical diagnostics (for reporting voice issues)",
+    diagnosticsClear:  "Clear",
     shortcuts:         "Shortcuts: Ctrl+Enter start/stop · Ctrl+Backspace clear",
     donate:            "Buy me a beer 🍺",
     toggleLang:        "ES",
@@ -124,6 +129,7 @@ const UI_STRINGS = {
       transcript:  "Transcription will appear here...",
       translation: "Translation will appear here...",
       manual:      "Type or paste text to translate...",
+      diagnostics: "Technical events (startup, errors, results) from speech recognition will appear here...",
     },
     errors: {
       noSpeechApi:     "Your browser does not support Web Speech API.",
@@ -292,6 +298,9 @@ const runtimeIncrementalState = document.getElementById("runtime-incremental-sta
 const runtimeSegmentsState = document.getElementById("runtime-segments-state");
 const runtimeWordState = document.getElementById("runtime-word-state");
 const runtimeWatchdogState = document.getElementById("runtime-watchdog-state");
+const diagnosticsOutput = document.getElementById("diagnostics-output");
+const copyDiagnosticsBtn = document.getElementById("copy-diagnostics");
+const clearDiagnosticsBtn = document.getElementById("clear-diagnostics");
 
 const TYPING_PROFILES = {
   cinematic: { speed: 30, stagger: true },
@@ -754,6 +763,16 @@ function wireEvents() {
   copyTranslationBtn.addEventListener("click", function () {
     copyText(translationOutput.value);
   });
+  if (copyDiagnosticsBtn) {
+    copyDiagnosticsBtn.addEventListener("click", function () {
+      copyText(diagnosticsOutput.value);
+    });
+  }
+  if (clearDiagnosticsBtn) {
+    clearDiagnosticsBtn.addEventListener("click", function () {
+      diagnosticsOutput.value = "";
+    });
+  }
 
   speakTranscriptBtn.addEventListener("click", function () {
     speakText(transcriptOutput.value, resolveSpeechLang(sourceSelect.value));
@@ -1170,6 +1189,31 @@ function showError(message) {
 
   errorBox.hidden = false;
   errorBox.textContent = message;
+}
+
+// Tope de líneas del panel de diagnóstico visible (mismo criterio que
+// segmentCache MAX_CACHE_SIZE: evitar que crezca sin límite en sesiones largas).
+const MAX_DIAGNOSTIC_LINES = 200;
+
+/**
+ * Registra un evento técnico del ciclo de reconocimiento de voz, visible
+ * directamente en la UI (panel "Diagnóstico técnico"), para que un usuario sin
+ * acceso o conocimiento de DevTools pueda reportar exactamente qué ocurrió
+ * (arranque, errores como "no-speech", resultados vacíos, etc.).
+ */
+function logDiagnostic(message) {
+  var line = "[" + new Date().toLocaleTimeString() + "] " + message;
+  console.warn("[AlbertTranslator]", message);
+  if (!diagnosticsOutput) {
+    return;
+  }
+  var lines = diagnosticsOutput.value ? diagnosticsOutput.value.split("\n") : [];
+  lines.push(line);
+  if (lines.length > MAX_DIAGNOSTIC_LINES) {
+    lines = lines.slice(lines.length - MAX_DIAGNOSTIC_LINES);
+  }
+  diagnosticsOutput.value = lines.join("\n");
+  diagnosticsOutput.scrollTop = diagnosticsOutput.scrollHeight;
 }
 
 function ensureToastElement() {
@@ -2115,6 +2159,7 @@ function bindRecognitionHandlers(recognitionInstance) {
   }
 
   recognitionInstance.onstart = function () {
+    logDiagnostic("onstart: el motor confirmó el arranque real del micrófono.");
     clearRecognitionStartWatchdog();
     clearRecognitionRestartTimer();
     resetRecognitionRestartPending();
@@ -2145,7 +2190,7 @@ function bindRecognitionHandlers(recognitionInstance) {
     // DIAGNOSTICO: "no-speech" y "aborted" se ignoran en la UI a propósito (son
     // normales entre frases), pero eso los hacía invisibles para depurar un
     // caso donde el micrófono está activo y jamás llega ningún resultado.
-    console.warn("[AlbertTranslator] recognition onerror:", code);
+    logDiagnostic("onerror: " + code);
 
     if (code === "aborted") {
       if (!listeningRequested) {
@@ -2186,6 +2231,7 @@ function bindRecognitionHandlers(recognitionInstance) {
   };
 
   recognitionInstance.onend = function () {
+    logDiagnostic("onend: la sesión de reconocimiento terminó.");
     clearRecognitionStartWatchdog();
     recognitionLastEventAt = Date.now();
     clearInterimCommitTimer();
@@ -2231,7 +2277,7 @@ function bindRecognitionHandlers(recognitionInstance) {
     // DIAGNOSTICO: confirma si el motor SÍ está devolviendo resultados (aunque
     // sea vacíos) para distinguir "nunca llega onresult" de "llega pero no
     // se renderiza".
-    console.warn("[AlbertTranslator] recognition onresult:", { finalChunk: finalChunk, interimChunk: interimChunk });
+    logDiagnostic("onresult: final=\"" + finalChunk + "\" interim=\"" + interimChunk + "\"");
 
     if (finalChunk) {
       clearInterimCommitTimer();
@@ -2276,7 +2322,9 @@ function bindRecognitionHandlers(recognitionInstance) {
 
 async function startListening() {
   showError("");
+  logDiagnostic("startListening(): clic en \"Iniciar escucha\" (lang=" + sourceSelect.value + ").");
   if (!SpeechRecognitionCtor) {
+    logDiagnostic("startListening(): SpeechRecognitionCtor no existe en este navegador.");
     showError(i18n("errors.noSpeechApi"));
     return;
   }
@@ -2319,6 +2367,7 @@ async function startListening() {
     return;
   }
   bindRecognitionHandlers(recognition);
+  logDiagnostic("startListening(): recognition.start() llamado (continuous=" + recognition.continuous + ", interimResults=" + recognition.interimResults + ").");
   recognition.start();
   armRecognitionStartWatchdog();
 }
@@ -2386,6 +2435,7 @@ function handleRecognitionStartTimeout() {
   if (listening || !listeningRequested) {
     return;
   }
+  logDiagnostic("TIMEOUT: onstart nunca llegó tras " + RECOGNITION_START_TIMEOUT_MS + "ms. Se descarta el intento.");
 
   var stuckRecognition = recognition;
   recognition = null;
@@ -2604,6 +2654,7 @@ function scheduleRecognitionRestart(reason, delayMs, skipThrottle) {
 }
 
 function stopListening() {
+  logDiagnostic("stopListening(): clic en \"Detener\" (listening=" + listening + ").");
   listeningRequested = false;
   lastIncrementalAddedCount = 0;
   recognitionConsecutiveErrors = 0;

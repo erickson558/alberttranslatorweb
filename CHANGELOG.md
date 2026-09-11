@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.7.0] - 2026-09-11
+### Added
+- **Panel de "Diagnóstico técnico" visible en la UI** (nuevo `<details>` colapsable debajo de la caja de errores, en `index.php`): el usuario reportó no tener forma clara de saber si la app "tiene logs" ni cómo revisar la consola del navegador. Ahora la propia interfaz registra en un `<textarea readonly>` visible (con botones "Copiar" y "Limpiar") cada evento clave del ciclo de reconocimiento de voz, con hora exacta: clic en "Iniciar escucha", llamada a `recognition.start()`, `onstart`, cada código de `onerror` (incluyendo `no-speech`/`aborted`, que la UI normal ignora a propósito por ser habituales entre frases), cada `onresult` (con el contenido final/interim aunque sea vacío), el timeout de arranque, y clic en "Detener". Así el usuario puede reportar el problema copiando y pegando el diagnóstico, sin necesitar DevTools.
+- Nueva función `logDiagnostic()` en `frontend/js/app.js` (también sigue emitiendo a `console.warn` para quien sí use DevTools), con tope de `MAX_DIAGNOSTIC_LINES = 200` para no crecer sin límite en sesiones largas (mismo criterio que `segmentCache`/`MAX_CACHE_SIZE`).
+- Nuevas claves i18n `diagnosticsTitle`, `diagnosticsClear`, `placeholders.diagnostics` en `UI_STRINGS.es`/`UI_STRINGS.en`. Nuevos estilos `.diagnostics-panel`/`.diagnostics-output` en `frontend/css/style.css` reutilizando las variables de tema existentes.
+- Verificado con prueba en navegador real (Chromium headless): el panel captura correctamente la secuencia completa de un ciclo iniciar/detener (incluyendo el error real `not-allowed` por falta de permiso de micrófono en el entorno headless), visible de inmediato en el textarea. `node tests/transcription_engine_merge_cases.js` sigue en verde.
+
+### Changed
+- Versión sincronizada a V1.7.0 en VERSION, APP_VERSION, README y CHANGELOG.
+
 ## [V1.6.7] - 2026-09-11
 ### Added
 - **Diagnóstico temporal** para el caso reportado donde el micrófono está activo (indicador de grabación encendido, estado "Escuchando en vivo"), pero nunca aparece transcripción y no hay ningún error visible ni en la app ni en consola. Se detectó que `recognitionInstance.onerror` ignora en silencio (sin log, sin UI) los códigos `no-speech` y `aborted` por ser normales entre frases — pero eso los hacía invisibles para diagnosticar un caso donde el motor de voz nunca detecta habla en absoluto. Se agregó `console.warn("[AlbertTranslator] recognition onerror:", code)` en `onerror` y `console.warn("[AlbertTranslator] recognition onresult:", {...})` en `onresult` (`frontend/js/app.js`) para poder confirmar en las DevTools si el motor recibe `no-speech` repetidamente (indicaría que el audio real no está llegando al motor, p. ej. dispositivo de entrada incorrecto o silenciado en Windows/Chrome) o si `onresult` sí se dispara pero con contenido vacío.
