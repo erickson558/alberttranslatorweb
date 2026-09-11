@@ -221,8 +221,13 @@
             translated = "";
           }
         }
-        // Guarda en caché respetando el límite de tamaño.
-        setCacheEntry(cacheKey, translated);
+        // Solo cachea resultados no vacíos: si todos los proveedores fallaron
+        // (translated === ""), cachear ese fallo dejaría el segmento "envenenado"
+        // -devolviendo siempre vacío desde el caché- aunque una petición futura
+        // idéntica sí pudiera tener éxito (proveedor recuperado, red estable, etc.).
+        if (translated) {
+          setCacheEntry(cacheKey, translated);
+        }
       }
 
       translatedSegments.push(translated || "");

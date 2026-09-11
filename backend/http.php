@@ -45,12 +45,18 @@ function http_get_remote($url, &$httpCode, &$networkError)
         $curlError = curl_error($ch);
         curl_close($ch);
 
-        if ($response === false || $curlError) {
-            $networkError = 'Error de red al traducir: ' . $curlError;
-            return false;
+        if ($response !== false && !$curlError) {
+            return $response;
         }
 
-        return $response;
+        // BUG FIX: la extension curl de PHP puede fallar (p.ej. "SSL certificate
+        // problem: unable to get local issuer certificate" cuando el cacert.pem del
+        // php.ini esta desactualizado o ausente, comun en instalaciones EasyPHP/Windows)
+        // aunque el sistema si tenga una cadena de confianza SSL valida. En ese caso no
+        // se debe rendir de inmediato: se reintenta con curl.exe / PowerShell, que
+        // resuelven la validacion de certificados de forma independiente al ini de PHP.
+        // Nunca se desactiva la verificacion SSL: solo se cambia de cliente HTTP.
+        $networkError = 'Error de red al traducir: ' . $curlError;
     }
 
     $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError);
