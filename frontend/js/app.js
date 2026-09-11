@@ -2142,6 +2142,10 @@ function bindRecognitionHandlers(recognitionInstance) {
     clearRecognitionStartWatchdog();
     recognitionLastEventAt = Date.now();
     var code = String(event && event.error ? event.error : "desconocido");
+    // DIAGNOSTICO: "no-speech" y "aborted" se ignoran en la UI a propósito (son
+    // normales entre frases), pero eso los hacía invisibles para depurar un
+    // caso donde el micrófono está activo y jamás llega ningún resultado.
+    console.warn("[AlbertTranslator] recognition onerror:", code);
 
     if (code === "aborted") {
       if (!listeningRequested) {
@@ -2224,6 +2228,10 @@ function bindRecognitionHandlers(recognitionInstance) {
     var finalChunk = String(parsed && parsed.finalChunk ? parsed.finalChunk : "").trim();
     var interimChunk = String(parsed && parsed.interimChunk ? parsed.interimChunk : "").trim();
     lastInterimChunk = interimChunk;
+    // DIAGNOSTICO: confirma si el motor SÍ está devolviendo resultados (aunque
+    // sea vacíos) para distinguir "nunca llega onresult" de "llega pero no
+    // se renderiza".
+    console.warn("[AlbertTranslator] recognition onresult:", { finalChunk: finalChunk, interimChunk: interimChunk });
 
     if (finalChunk) {
       clearInterimCommitTimer();

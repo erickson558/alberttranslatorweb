@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.6.7] - 2026-09-11
+### Added
+- **Diagnóstico temporal** para el caso reportado donde el micrófono está activo (indicador de grabación encendido, estado "Escuchando en vivo"), pero nunca aparece transcripción y no hay ningún error visible ni en la app ni en consola. Se detectó que `recognitionInstance.onerror` ignora en silencio (sin log, sin UI) los códigos `no-speech` y `aborted` por ser normales entre frases — pero eso los hacía invisibles para diagnosticar un caso donde el motor de voz nunca detecta habla en absoluto. Se agregó `console.warn("[AlbertTranslator] recognition onerror:", code)` en `onerror` y `console.warn("[AlbertTranslator] recognition onresult:", {...})` en `onresult` (`frontend/js/app.js`) para poder confirmar en las DevTools si el motor recibe `no-speech` repetidamente (indicaría que el audio real no está llegando al motor, p. ej. dispositivo de entrada incorrecto o silenciado en Windows/Chrome) o si `onresult` sí se dispara pero con contenido vacío.
+- No cambia ningún comportamiento funcional (solo agrega logs); se retirará una vez confirmada la causa raíz.
+
+### Changed
+- Versión sincronizada a V1.6.7 en VERSION, APP_VERSION, README y CHANGELOG.
+
 ## [V1.6.6] - 2026-09-11
 ### Fixed
 - **"Al detener se congela el sitio (botones/estado pegados) y sigue sin transcribir, igual en Chromium y en Google Chrome"**: al confirmarse que el problema ocurre igual en Chrome oficial (con soporte completo de Web Speech API), se descarta la limitación de Chromium como causa y se corrige lo que sí es controlable desde el código:
