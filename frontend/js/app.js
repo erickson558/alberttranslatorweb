@@ -2362,11 +2362,22 @@ async function startListening() {
   recognitionLastEventAt = Date.now();
   recognitionUseLocalProcessing = false;
   setStatus("processing", "Iniciando escucha...");
+  // BUG FIX: habilita "Detener" desde el primer clic, no solo tras onstart.
+  // Sin esto, si el arranque se demora o se cuelga (browsers sin backend real
+  // de Web Speech API), el usuario no tiene forma de cancelar manualmente.
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
 
   try {
     recognitionUseLocalProcessing = await ensureLocalRecognitionReady(sourceSelect.value);
   } catch (_e) {
     recognitionUseLocalProcessing = false;
+  }
+
+  // BUG FIX: si el usuario canceló (stopListening) mientras se esperaba la
+  // detección de reconocimiento local, no debe arrancar igual el micrófono.
+  if (!listeningRequested) {
+    return;
   }
 
   initializeRecognitionInstance();
@@ -2375,6 +2386,8 @@ async function startListening() {
   if (!recognition) {
     showError(i18n("errors.noRecognition"));
     listeningRequested = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
     setStatus("error", i18n("errors.initError"));
     return;
   }
@@ -2675,6 +2688,16 @@ function stopListening() {
   clearRecognitionStartWatchdog();
   clearRecognitionRestartTimer();
   restartHeartbeat(false);
+
+  // BUG FIX: si el reconocimiento nunca llegó a confirmar su arranque (onstart
+  // jamás se disparó — típico en navegadores sin backend real de Web Speech
+  // API), no hay que esperar a "onend" para restaurar la UI: ese evento puede
+  // no llegar nunca y el botón "Detener" quedaría con el estado congelado.
+  if (!listening) {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus("idle", i18n("status.idle"));
+  }
   recognitionRestartAttempts = 0;
   resetLiveEnqueueState();
   if (livePreviewDelayTimer) {
