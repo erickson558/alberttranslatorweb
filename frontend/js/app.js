@@ -308,9 +308,16 @@ const TYPING_PROFILES = {
   turbo: { speed: 92, stagger: false },
 };
 
-const BASE = (window.PHP_APP_CONFIG && window.PHP_APP_CONFIG.apiBaseUrl
-  ? window.PHP_APP_CONFIG.apiBaseUrl
-  : window.location.origin).replace(/\/$/, "");
+const BASE = (window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "")).replace(/\/$/, "");
+
+/** Config expuesta por PHP vía data-app-config en <body> (ver index.php). */
+const PHP_APP_CONFIG = (function () {
+  try {
+    return JSON.parse(document.body.getAttribute("data-app-config") || "{}") || {};
+  } catch (_e) {
+    return {};
+  }
+})();
 const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 const UI_PREFS_KEY = "albert_translator_ui_prefs_v1";
 const UI_PREFS_COOKIE = "albert_translator_ui_prefs";
@@ -352,6 +359,10 @@ let recognitionSessionStartedAt = 0;
 let recognitionRestartPendingSince = 0;
 let recognitionRestartPendingReason = "";
 let recognitionUseLocalProcessing = false;
+// Si AssemblyAI falla por config/auth (no por red transitoria), se deja de
+// intentar el resto de la sesión para no reintentar en bucle un motor roto:
+// cae de vuelta al reconocimiento nativo del navegador.
+let assemblyAiDisabledForSession = false;
 let incrementalSourceSegments = [];
 let incrementalTranslatedSegments = [];
 let incrementalContextKey = "";
@@ -2206,6 +2217,19 @@ function bindRecognitionHandlers(recognitionInstance) {
       return;
     }
 
+    if (code === "assemblyai-unavailable") {
+      // Fallo de configuración/token (no de red transitoria): reintentar el
+      // mismo motor en bucle no serviría de nada. Se desactiva para el resto
+      // de la sesión y se cae al reconocimiento nativo del navegador.
+      assemblyAiDisabledForSession = true;
+      logDiagnostic("AssemblyAI no disponible: se desactiva para esta sesión y se reintenta con el motor nativo.");
+      if (!listeningRequested) {
+        return;
+      }
+      scheduleRecognitionRestart("assemblyai-unavailable-hard", 200);
+      return;
+    }
+
     if (code === "not-allowed" || code === "service-not-allowed") {
       listeningRequested = false;
       stopRecognitionWatchdog();
@@ -2323,8 +2347,8 @@ function bindRecognitionHandlers(recognitionInstance) {
 async function startListening() {
   showError("");
   logDiagnostic("startListening(): clic en \"Iniciar escucha\" (lang=" + sourceSelect.value + ").");
-  if (!SpeechRecognitionCtor) {
-    logDiagnostic("startListening(): SpeechRecognitionCtor no existe en este navegador.");
+  if (!SpeechRecognitionCtor && !shouldUseAssemblyAI()) {
+    logDiagnostic("startListening(): ningún motor disponible (ni nativo ni AssemblyAI).");
     showError(i18n("errors.noSpeechApi"));
     return;
   }
@@ -2372,10 +2396,26 @@ async function startListening() {
   armRecognitionStartWatchdog();
 }
 
+/**
+ * AssemblyAI es una alternativa al reconocimiento nativo del navegador: se usa
+ * cuando el servidor tiene ASSEMBLYAI_API_KEY configurada, el navegador soporta
+ * las APIs necesarias (WebSocket/AudioWorklet/getUserMedia) y el idioma de
+ * origen está entre los que su streaming multilingüe soporta. Existe porque el
+ * motor nativo depende de que el navegador alcance el backend de voz de Google
+ * -en redes corporativas que lo bloquean, nunca produce resultados aunque el
+ * micrófono esté activo (ver diagnóstico: onstart se repite sin onresult).
+ */
+function shouldUseAssemblyAI() {
+  return !!(
+    !assemblyAiDisabledForSession
+    && PHP_APP_CONFIG.assemblyAiAvailable
+    && window.AlbertAssemblyAIEngine
+    && window.AlbertAssemblyAIEngine.isSupported()
+    && window.AlbertAssemblyAIEngine.isLanguageSupported(sourceSelect.value)
+  );
+}
+
 function initializeRecognitionInstance() {
-  if (!SpeechRecognitionCtor) {
-    return;
-  }
   if (recognition) {
     try {
       recognition.onstart = null;
@@ -2387,6 +2427,18 @@ function initializeRecognitionInstance() {
     }
   }
 
+  if (shouldUseAssemblyAI()) {
+    recognition = window.AlbertAssemblyAIEngine.createRecognition();
+    recognition.lang = resolveRecognitionLang(sourceSelect.value);
+    logDiagnostic("motor seleccionado: AssemblyAI (streaming, lang=" + recognition.lang + ")");
+    return;
+  }
+
+  if (!SpeechRecognitionCtor) {
+    recognition = null;
+    return;
+  }
+
   recognition = new SpeechRecognitionCtor();
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -2395,6 +2447,7 @@ function initializeRecognitionInstance() {
   if (recognitionUseLocalProcessing && "processLocally" in recognition) {
     recognition.processLocally = true;
   }
+  logDiagnostic("motor seleccionado: reconocimiento nativo del navegador (lang=" + recognition.lang + ")");
 }
 
 function clearRecognitionRestartTimer() {

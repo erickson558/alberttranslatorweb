@@ -16,6 +16,14 @@ if (!headers_sent()) {
 }
 $cssVersion = @filemtime(__DIR__ . '/frontend/css/style.css');
 $jsVersion  = @filemtime(__DIR__ . '/frontend/js/app.js');
+// Config PHP->JS como atributo data-* en <body> en vez de un <script> inline
+// con "window.PHP_APP_CONFIG = {...}": un atributo HTML lo lee cualquier
+// script externo sin depender de que un <script> inline particular se haya
+// ejecutado a tiempo (y en el orden esperado) antes de él.
+$appConfigForJs = json_encode([
+  'appVersion' => APP_VERSION,
+  'assemblyAiAvailable' => trim((string)ASSEMBLYAI_API_KEY) !== '',
+]);
 ?><!doctype html>
 <html lang="es">
 <head>
@@ -24,7 +32,7 @@ $jsVersion  = @filemtime(__DIR__ . '/frontend/js/app.js');
   <title><?php echo APP_NAME; ?> <?php echo APP_VERSION; ?></title>
   <link rel="stylesheet" href="./frontend/css/style.css?v=<?php echo (int)$cssVersion; ?>">
 </head>
-<body>
+<body data-app-config="<?php echo htmlspecialchars($appConfigForJs, ENT_QUOTES, 'UTF-8'); ?>">
   <main class="app-shell">
 
     <!-- ===== CABECERA ===== -->
@@ -207,17 +215,10 @@ $jsVersion  = @filemtime(__DIR__ . '/frontend/js/app.js');
     </footer>
   </main>
 
-  <!-- Configuración PHP → JS: URL base de la API y versión de la app. -->
-  <script>
-    window.PHP_APP_CONFIG = {
-      apiBaseUrl: window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, ""),
-      appVersion: <?php echo json_encode(APP_VERSION); ?>,
-    };
-  </script>
-
-  <!-- Motores en orden de dependencia: transcription → translation → app (orquestador) -->
+  <!-- Motores en orden de dependencia: transcription → translation → assemblyai → app (orquestador) -->
   <script src="./frontend/js/transcription-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/translation-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
+  <script src="./frontend/js/assemblyai-engine.js?v=<?php echo (int)$jsVersion; ?>"></script>
   <script src="./frontend/js/app.js?v=<?php echo (int)$jsVersion; ?>"></script>
 </body>
 </html>

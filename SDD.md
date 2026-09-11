@@ -167,6 +167,44 @@ o estados "activo pero mudo" de Chromium/Edge.
 **Comportamiento:** abre en nueva pestaña (`target="_blank"`) para no interrumpir la sesión activa
 **i18n:** `data-i18n="donate"` — "Cómprame una cerveza 🍺" / "Buy me a beer 🍺"
 
+### 5.6 Motor AssemblyAI (frontend/js/assemblyai-engine.js)
+
+**Propósito:** Alternativa al reconocimiento nativo del navegador (Web Speech API) para redes
+que bloquean el backend de voz de Google — el micrófono arranca (`onstart` se dispara) pero
+nunca llega ningún resultado ni error, indefinidamente.
+
+**Especificación:**
+- Requiere `ASSEMBLYAI_API_KEY` configurada (`.env` en la raíz, ver `.env.example`; nunca se
+  expone al navegador — `api/stt-stream-token.php` mintea un token temporal de un solo uso).
+- Se activa automáticamente cuando: la API key está configurada (`assemblyAiAvailable` en
+  `data-app-config`), el navegador soporta `WebSocket`/`AudioWorklet`/`getUserMedia`, y el
+  idioma de origen está entre los soportados por el streaming multilingüe de AssemblyAI
+  (`en`, `es`, `fr`, `de`, `it`, `pt` — no incluye `auto`).
+- `createRecognition()` devuelve un objeto con la misma forma que `SpeechRecognition` nativo
+  (`continuous`, `interimResults`, `lang`, `onstart`/`onresult`/`onerror`/`onend`,
+  `start()`/`stop()`/`abort()`), para que `app.js` lo use sin ningún cambio en su lógica
+  existente (watchdogs, botones, merge de transcripción).
+- `frontend/js/pcm-audio-processor.js` (AudioWorklet) convierte el audio del micrófono a
+  PCM16 a 16kHz, el formato que espera `wss://streaming.assemblyai.com/v3/ws`.
+- Si el token no se puede obtener o el WebSocket falla por auth (`onerror: assemblyai-unavailable`),
+  se desactiva para el resto de la sesión (`assemblyAiDisabledForSession`) y cae de vuelta al
+  motor nativo — nunca reintenta en bucle un motor mal configurado.
+
+### 5.7 Panel de diagnóstico técnico (app.js: `logDiagnostic()`)
+
+**Propósito:** Dar visibilidad de los eventos del ciclo de reconocimiento de voz directamente
+en la UI, sin requerir DevTools, para que cualquier usuario pueda reportar un problema.
+
+**Especificación:**
+- `<details id="diagnostics-panel">` colapsable en `index.php`, con un `<textarea readonly>` y
+  botones "Copiar"/"Limpiar".
+- `logDiagnostic(message)` antepone hora local, hace `console.warn` y cachea en el textarea con
+  tope `MAX_DIAGNOSTIC_LINES = 200` (mismo criterio que `segmentCache`).
+- Puntos instrumentados: clic en Iniciar/Detener, motor seleccionado (nativo vs AssemblyAI),
+  `recognition.start()`, `onstart`, cada código de `onerror` (incluido `no-speech`/`aborted`,
+  que la UI normal ignora por ser habituales entre frases), `onresult` (final/interim), y el
+  timeout de arranque.
+
 ---
 
 ## 6. Política de versionado
@@ -214,6 +252,19 @@ o estados "activo pero mudo" de Chromium/Edge.
 **Decisión:** Sistema i18n completamente en JS con data-i18n attributes.
 **Razón:** Permite cambiar idioma sin recargar la página, preservando el estado de la sesión activa.
 **Trade-off:** Los textos iniciales en el HTML son en español — se corrigen al ejecutar `applyUiLanguage()` en el primer render.
+
+### ADR-006: AssemblyAI como motor de voz alternativo (adapter, no reemplazo)
+**Decisión:** `assemblyai-engine.js` expone un objeto "shape-compatible" con `SpeechRecognition`
+nativo, en vez de reescribir el flujo de reconocimiento en `app.js` para un segundo motor.
+**Razón:** Se diagnosticó (con un panel de diagnóstico visible en la UI) que en redes que
+bloquean el backend de voz de Google, `recognition.start()` dispara `onstart` repetidamente
+cada ~12s sin producir jamás `onresult` ni `onerror` — el micrófono nunca deja de "escuchar"
+pero tampoco transcribe nada. Reescribir todo el flujo de `app.js` (watchdogs, botones, merge
+de transcripción) para un segundo motor hubiera duplicado una lógica ya probada; el patrón
+adapter permite reutilizarla intacta.
+**Trade-off:** AssemblyAI multilingüe solo cubre 6 idiomas (en/es/fr/de/it/pt) — para el resto
+se sigue usando el motor nativo. Requiere que el usuario configure su propia API key en `.env`
+(tiene capa gratuita); sin ella, el comportamiento es idéntico al de antes de este ADR.
 
 ---
 

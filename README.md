@@ -1,6 +1,6 @@
 # AlbertTranslator PHP
 
-Version actual: V1.7.0
+Version actual: V1.8.0
 
 Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache, con frontend y backend PHP desacoplados.
 
@@ -15,13 +15,13 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - Mantiene una UX fluida para texto incremental y traduccion instantanea.
 - Incluye watchdog de reconocimiento para recuperar automaticamente la captura cuando hay cortes o silencios prolongados.
 - Permite ajustar desde la UI la sensibilidad del watchdog de voz para reaccionar mas rapido ante pausas o cuelgues del motor.
-- Intenta usar reconocimiento local del navegador cuando Chromium lo soporta, para reducir dependencia del servicio remoto del navegador.
 - Evita retraducciones redundantes con encolado en vivo deduplicado y control de frecuencia.
 - Reduce carga sobre el reconocimiento retrasando la traduccion en vivo hasta que el texto se estabiliza o llega como resultado final.
 - Muestra estado operativo en tiempo real (microfono, incremental, segmentos y palabras).
 - Incluye atajos de teclado para flujo rapido: Ctrl+Enter (iniciar/detener o traducir manual) y Ctrl+Backspace (limpiar).
 - Permite exportar a TXT: ambos paneles, solo transcripcion o solo traduccion.
-- Deja preparado un fallback externo de streaming con token temporal en `/api/stt-stream-token.php` para integraciones futuras con proveedor gratuito.
+- Soporta AssemblyAI (streaming vía WebSocket) como motor de voz alternativo al nativo del navegador, para redes que bloquean el backend de voz de Google — requiere API key propia en `.env` (ver `.env.example`).
+- Panel de "Diagnóstico técnico" visible en la UI: registra en vivo los eventos del reconocimiento de voz para reportar problemas sin usar DevTools.
 - Soporta cambio de idioma de interfaz (ES ↔ EN) con un clic, persistido en localStorage.
 - Incluye botón de donacion "Comprame una cerveza" vinculado a PayPal.
 - Optimizado en uso de RAM (cache LRU con limite de 80 entradas) y CPU (heartbeat adaptativo 1s activo / 4s reposo, pausa en tab oculto).
@@ -33,12 +33,25 @@ Aplicacion web de traduccion y transcripcion en tiempo real para EasyPHP/Apache,
 - frontend/js/app.js: logica de interfaz, reconocimiento de voz y eventos de usuario.
 - frontend/js/transcription-engine.js: motor de transcripcion separado.
 - frontend/js/translation-engine.js: motor de traduccion separado con procesamiento por frases/oraciones.
+- frontend/js/assemblyai-engine.js: motor de voz alternativo por streaming (AssemblyAI).
+- frontend/js/pcm-audio-processor.js: AudioWorklet que convierte el audio del mic a PCM16.
 - api/health.php: endpoint de salud.
-- api/stt-stream-token.php: endpoint opcional para emitir token temporal de STT streaming externo.
+- api/stt-stream-token.php: emite un token temporal de AssemblyAI para streaming STT desde el navegador.
 - api/translate-text.php: endpoint de traduccion.
-- backend/config.php: configuracion global y version de app.
+- backend/config.php: configuracion global y version de app; carga `.env` si existe.
 - backend/http.php: utilidades HTTP/JSON.
 - backend/translator_service.php: logica de traduccion y fallback.
+
+## Configuracion opcional: AssemblyAI (motor de voz alternativo)
+
+Si tu red bloquea el backend de voz de Google (el microfono arranca pero nunca transcribe
+nada), puedes habilitar AssemblyAI como motor alternativo:
+
+1. Crea una cuenta gratuita en https://www.assemblyai.com/ y copia tu API key.
+2. Copia `.env.example` a `.env` (en la raiz del proyecto) y completa `ASSEMBLYAI_API_KEY=`.
+3. Recarga la pagina — no hace falta reiniciar Apache.
+
+Sin este paso, la app funciona exactamente igual que antes (motor nativo del navegador).
 
 ## Requisitos y dependencias
 

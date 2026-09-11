@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 The format follows Keep a Changelog and the project uses Semantic Versioning with a V prefix: Vx.x.x.
 
+## [V1.8.0] - 2026-09-11
+### Added
+- **Motor de voz alternativo vía AssemblyAI (streaming WebSocket)**: se agrega como alternativa al reconocimiento nativo del navegador (Web Speech API), para el caso reportado por el usuario donde el micrófono arranca (`onstart` se repite cada ~12s) pero nunca llega ningún resultado ni error — confirmado en ambos Chromium y Google Chrome, apuntando a una red que bloquea el backend de voz de Google.
+  - `frontend/js/assemblyai-engine.js`: expone `AlbertAssemblyAIEngine.createRecognition()`, un objeto "shape-compatible" con `SpeechRecognition` nativo (mismos `onstart`/`onresult`/`onerror`/`onend`, `start()`/`stop()`/`abort()`), para que `app.js` lo use sin ningún cambio en su lógica existente (watchdogs, botones, merge de transcripción). Se activa solo cuando el servidor tiene `ASSEMBLYAI_API_KEY` configurada, el navegador soporta `WebSocket`/`AudioWorklet`/`getUserMedia`, y el idioma de origen está entre los 6 que soporta el streaming multilingüe de AssemblyAI (en/es/fr/de/it/pt).
+  - `frontend/js/pcm-audio-processor.js`: AudioWorklet que convierte el audio del micrófono a PCM16 a 16kHz, el formato que espera `wss://streaming.assemblyai.com/v3/ws`.
+  - `api/stt-stream-token.php` (ya existía como scaffolding "futuro") ahora reutiliza `http_get_remote()` de `backend/http.php` en vez de duplicar su propia lógica de cURL/file_get_contents sin los fallbacks a curl.exe/PowerShell — sin esto, el mismo problema de certificado SSL ya resuelto para traducción (V1.6.1) volvía a bloquear la emisión de tokens en este entorno.
+  - `backend/http.php`: `http_get_remote()` y sus fallbacks (`http_get_remote_via_curl_cli`, `http_get_remote_via_powershell`) ahora aceptan headers extra opcionales (para el `Authorization` de AssemblyAI). Se corrigió además un bug real: `http_get_remote_via_curl_cli()` descartaba el cuerpo de cualquier respuesta con status fuera de 2xx, perdiendo mensajes de error legibles (ej. "Invalid API key") — los llamadores ya validan `$httpCode` por su cuenta, así que ahora se les deja decidir.
+  - Si AssemblyAI falla por configuración/token inválido (no por red transitoria), se desactiva para el resto de la sesión y cae de vuelta al motor nativo, sin reintentar en bucle un motor roto.
+  - `backend/config.php`: carga variables desde un archivo `.env` en la raíz si existe (sin dependencias externas) — mucho más simple en EasyPHP/Windows que configurar variables de entorno del sistema. Nuevo `.env.example` con instrucciones.
+- **Config PHP→JS más robusta**: se reemplaza el `<script>` inline `window.PHP_APP_CONFIG = {...}` por un atributo `data-app-config` en `<body>` (leído por `app.js`/`assemblyai-engine.js`), para que ningún script dependa de que otro `<script>` particular se haya ejecutado antes en el orden esperado.
+- Validado end-to-end con una API key de prueba inválida: el token endpoint devuelve correctamente el error real de AssemblyAI (antes devolvía un genérico "no se pudo conectar"), y el frontend detecta el fallo, se desactiva para la sesión, y cae al motor nativo sin quedar colgado. `node tests/transcription_engine_merge_cases.js` sigue en verde; traducción manual y ciclo iniciar/detener verificados en navegador real.
+
+### Changed
+- CLAUDE.md y SDD.md actualizados con la nueva arquitectura (componentes 5.6/5.7, ADR-006).
+- Versión sincronizada a V1.8.0 en VERSION, APP_VERSION, README y CHANGELOG.
+
 ## [V1.7.0] - 2026-09-11
 ### Added
 - **Panel de "Diagnóstico técnico" visible en la UI** (nuevo `<details>` colapsable debajo de la caja de errores, en `index.php`): el usuario reportó no tener forma clara de saber si la app "tiene logs" ni cómo revisar la consola del navegador. Ahora la propia interfaz registra en un `<textarea readonly>` visible (con botones "Copiar" y "Limpiar") cada evento clave del ciclo de reconocimiento de voz, con hora exacta: clic en "Iniciar escucha", llamada a `recognition.start()`, `onstart`, cada código de `onerror` (incluyendo `no-speech`/`aborted`, que la UI normal ignora a propósito por ser habituales entre frases), cada `onresult` (con el contenido final/interim aunque sea vacío), el timeout de arranque, y clic en "Detener". Así el usuario puede reportar el problema copiando y pegando el diagnóstico, sin necesitar DevTools.

@@ -5,11 +5,16 @@
 Aplicación web PHP de **transcripción en vivo y traducción en tiempo real**.
 Corre sobre EasyPHP/Apache en `http://localhost:888/monitoreos/AlbertTranslator/`.
 
-- Captura voz con Web Speech API (browser-side).
+- Captura voz con Web Speech API (browser-side), con AssemblyAI (streaming vía
+  WebSocket) como motor alternativo cuando está configurado y el idioma es
+  compatible — útil en redes que bloquean el backend de voz de Google.
 - Traduce vía endpoints PHP que hacen proxy a Google Free, LibreTranslate, MyMemory.
 - Fallback local word-by-word EN↔ES cuando todos los proveedores fallan.
 - UI dark futurista con typewriter effect, watchdog de reconocimiento y runtime strip.
 - Soporte multiidioma de interfaz (ES ↔ EN) vía sistema i18n en app.js.
+- Panel de "Diagnóstico técnico" visible en la UI: registra en vivo los eventos
+  del ciclo de reconocimiento de voz (arranque, errores, resultados) para que
+  un usuario sin DevTools pueda reportar problemas.
 
 ## Versión actual
 
@@ -22,20 +27,23 @@ Leer siempre el archivo `VERSION` — no memorizar la versión. Sincronizar en:
 ## Arquitectura de archivos
 
 ```
-index.php                    ← HTML principal, inyecta PHP_APP_CONFIG en window
+index.php                    ← HTML principal, expone config PHP->JS vía data-app-config en <body>
+.env                          ← API keys locales (gitignored) — ver .env.example
 backend/
-  config.php                 ← constantes globales (APP_NAME, APP_VERSION, timeouts)
-  http.php                   ← utilidades HTTP: http_get_remote() con cURL/PowerShell
+  config.php                 ← constantes globales (APP_NAME, APP_VERSION, timeouts); carga .env
+  http.php                   ← utilidades HTTP: http_get_remote() con cURL/PowerShell, headers opcionales
   translator_service.php     ← lógica de traducción multi-proveedor + fallbacks
 api/
   health.php                 ← GET /api/health.php
   translate-text.php         ← POST /api/translate-text.php
-  stt-stream-token.php       ← token temporal para streaming STT externo (futuro)
+  stt-stream-token.php       ← token temporal de AssemblyAI para streaming STT desde el navegador
 frontend/
   css/style.css              ← estilos dark mode
   js/
     transcription-engine.js  ← AlbertTranscriptionEngine: merge de chunks, normalización
     translation-engine.js    ← AlbertTranslationEngine: caché LRU + translate by phrases
+    assemblyai-engine.js     ← AlbertAssemblyAIEngine: motor de voz alternativo (streaming WebSocket)
+    pcm-audio-processor.js   ← AudioWorklet: convierte audio del mic a PCM16 para AssemblyAI
     app.js                   ← orquestador: speech recognition, i18n, UI events, heartbeat
 tests/
   transcription_engine_merge_cases.js  ← casos de test de merge

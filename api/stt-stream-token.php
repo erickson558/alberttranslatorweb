@@ -15,58 +15,16 @@ if (trim((string)ASSEMBLYAI_API_KEY) === '') {
 }
 
 $url = 'https://streaming.assemblyai.com/v3/token?expires_in_seconds=' . (int)ASSEMBLYAI_TOKEN_TTL_SEC;
-$headers = [
-    'Accept: application/json',
-    'Authorization: ' . ASSEMBLYAI_API_KEY,
-    'User-Agent: AlbertTranslator-PHP/' . APP_VERSION,
-];
 
-$responseBody = false;
-$networkError = '';
+// Reutiliza http_get_remote() (con sus fallbacks a curl.exe/PowerShell) en vez
+// de duplicar la lógica de cURL/file_get_contents: en instalaciones EasyPHP/
+// Windows donde la extensión cURL de PHP no valida bien el certificado SSL,
+// esos fallbacks son los que permiten alcanzar a AssemblyAI igualmente.
 $httpCode = 0;
-
-if (function_exists('curl_init')) {
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_TIMEOUT => TRANSLATION_TIMEOUT_SEC,
-        CURLOPT_CONNECTTIMEOUT => 8,
-        CURLOPT_HTTPHEADER => $headers,
-    ]);
-
-    $responseBody = curl_exec($ch);
-    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    curl_close($ch);
-
-    if ($responseBody === false || $curlError) {
-        $networkError = 'No se pudo solicitar token temporal a AssemblyAI: ' . $curlError;
-    }
-}
-
-if ($responseBody === false) {
-    $context = stream_context_create([
-        'http' => [
-            'method' => 'GET',
-            'timeout' => TRANSLATION_TIMEOUT_SEC,
-            'header' => implode("\r\n", $headers) . "\r\n",
-        ],
-    ]);
-
-    $responseBody = @file_get_contents($url, false, $context);
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        foreach ($http_response_header as $headerLine) {
-            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $headerLine, $m)) {
-                $httpCode = (int)$m[1];
-                break;
-            }
-        }
-    }
-    if ($responseBody === false && $networkError === '') {
-        $networkError = 'No se pudo solicitar token temporal a AssemblyAI.';
-    }
-}
+$networkError = '';
+$responseBody = http_get_remote($url, $httpCode, $networkError, [
+    'Authorization: ' . ASSEMBLYAI_API_KEY,
+]);
 
 if ($responseBody === false) {
     send_json([

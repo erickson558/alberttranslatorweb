@@ -22,10 +22,14 @@ function read_json_body()
     return $decoded;
 }
 
-function http_get_remote($url, &$httpCode, &$networkError)
+function http_get_remote($url, &$httpCode, &$networkError, $extraHeaders = [])
 {
     $httpCode = 0;
     $networkError = '';
+    $headers = array_merge([
+        'Accept: application/json',
+        'User-Agent: AlbertTranslator-PHP/1.2.0',
+    ], $extraHeaders);
 
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
@@ -34,10 +38,7 @@ function http_get_remote($url, &$httpCode, &$networkError)
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_TIMEOUT => TRANSLATION_TIMEOUT_SEC,
             CURLOPT_CONNECTTIMEOUT => 8,
-            CURLOPT_HTTPHEADER => [
-                'Accept: application/json',
-                'User-Agent: AlbertTranslator-PHP/1.2.0',
-            ],
+            CURLOPT_HTTPHEADER => $headers,
         ]);
 
         $response = curl_exec($ch);
@@ -59,12 +60,12 @@ function http_get_remote($url, &$httpCode, &$networkError)
         $networkError = 'Error de red al traducir: ' . $curlError;
     }
 
-    $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError);
+    $curlCliResponse = http_get_remote_via_curl_cli($url, $httpCode, $networkError, $extraHeaders);
     if ($curlCliResponse !== false) {
         return $curlCliResponse;
     }
 
-    $psResponse = http_get_remote_via_powershell($url, $httpCode, $networkError);
+    $psResponse = http_get_remote_via_powershell($url, $httpCode, $networkError, $extraHeaders);
     if ($psResponse !== false) {
         return $psResponse;
     }
@@ -73,7 +74,7 @@ function http_get_remote($url, &$httpCode, &$networkError)
         'http' => [
             'method' => 'GET',
             'timeout' => TRANSLATION_TIMEOUT_SEC,
-            'header' => "Accept: application/json\r\nUser-Agent: AlbertTranslator-PHP/1.2.0\r\n",
+            'header' => implode("\r\n", $headers) . "\r\n",
         ],
     ]);
 
@@ -95,7 +96,7 @@ function http_get_remote($url, &$httpCode, &$networkError)
     return $response;
 }
 
-function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
+function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError, $extraHeaders = [])
 {
     $httpCode = 0;
     if (stripos(PHP_OS, 'WIN') !== 0) {
@@ -107,7 +108,12 @@ function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
         return false;
     }
 
-    $cmd = 'curl.exe -s -L -o ' . escapeshellarg($tmpOut)
+    $headerArgs = '';
+    foreach ($extraHeaders as $header) {
+        $headerArgs .= ' -H ' . escapeshellarg($header);
+    }
+
+    $cmd = 'curl.exe -s -L' . $headerArgs . ' -o ' . escapeshellarg($tmpOut)
         . ' -w "%{http_code}" '
         . escapeshellarg($url);
 
@@ -120,16 +126,20 @@ function http_get_remote_via_curl_cli($url, &$httpCode, &$networkError)
     $content = @file_get_contents($tmpOut);
     @unlink($tmpOut);
 
-    if ($exitCode !== 0 || $status < 200 || $status >= 300 || $content === false || trim($content) === '') {
+    if ($exitCode !== 0 || $content === false || trim($content) === '') {
         $networkError = 'curl.exe no pudo recuperar contenido de traduccion.';
         return false;
     }
 
+    // BUG FIX: antes se descartaba cualquier respuesta con status fuera de
+    // 2xx, perdiendo el cuerpo (p.ej. un JSON de error legible de la API).
+    // Los llamadores (translator_service.php, stt-stream-token.php) ya
+    // validan $httpCode por su cuenta antes de confiar en el contenido.
     $httpCode = $status;
     return $content;
 }
 
-function http_get_remote_via_powershell($url, &$httpCode, &$networkError)
+function http_get_remote_via_powershell($url, &$httpCode, &$networkError, $extraHeaders = [])
 {
     $httpCode = 0;
     if (stripos(PHP_OS, 'WIN') !== 0) {
@@ -137,12 +147,27 @@ function http_get_remote_via_powershell($url, &$httpCode, &$networkError)
     }
 
     $timeout = (int)TRANSLATION_TIMEOUT_SEC;
+    $headersPs = '';
+    $pairs = [];
+    foreach ($extraHeaders as $header) {
+        if (strpos($header, ':') === false) {
+            continue;
+        }
+        list($headerName, $headerValue) = explode(':', $header, 2);
+        $headerName = str_replace("'", "''", trim($headerName));
+        $headerValue = str_replace("'", "''", trim($headerValue));
+        $pairs[] = "'" . $headerName . "'='" . $headerValue . "'";
+    }
+    if (!empty($pairs)) {
+        $headersPs = '-Headers @{' . implode(';', $pairs) . '} ';
+    }
+
     // BUG FIX: La cadena original usaba dobles comillas PHP, por lo que $r era
     // interpolada como variable PHP vacía y el script de PowerShell resultaba inválido
     // (" = Invoke-WebRequest..."). Ahora se usan comillas simples PHP para que $r
     // llegue literalmente al intérprete de PowerShell como la variable $r correcta.
     $psScript = 'try { '
-        . '$r = Invoke-WebRequest -UseBasicParsing -Uri ' . escapeshellarg($url)
+        . '$r = Invoke-WebRequest -UseBasicParsing ' . $headersPs . '-Uri ' . escapeshellarg($url)
         . ' -TimeoutSec ' . $timeout . '; '
         . '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; '
         . 'Write-Output $r.Content; exit 0 '
